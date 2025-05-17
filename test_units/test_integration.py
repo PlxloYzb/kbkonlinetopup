@@ -10,8 +10,10 @@ import sys
 import socket
 import threading
 import time
+import datetime
 from pathlib import Path
 from unittest.mock import patch, MagicMock
+from datetime import time as time_obj
 
 # 添加项目根目录到系统路径
 sys.path.append(str(Path(__file__).parent.parent))
@@ -294,6 +296,77 @@ class TestIntegration(unittest.TestCase):
         self.cursor.execute('SELECT * FROM kbk_ic_nm_count WHERE user = ?', ('张三',))
         record = self.cursor.fetchone()
         self.assertIsNotNone(record)
+    
+    def test_time_period_validation(self):
+        """测试时间段校验功能"""
+        # 创建有效卡请求
+        valid_card_request = (
+            "GET /index.html?info=12345&jihao=1&card=A1B2C3D4&dn=1234567890123456 HTTP/1.1\r\n"
+            "Host: localhost:88\r\n"
+            "\r\n"
+        ).encode('utf-8')
+        
+        # 测试允许的时间段
+        allowed_times = [
+            # 早餐时间段
+            datetime.datetime(2025, 5, 17, 4, 30),  # 04:30
+            # 午餐时间段
+            datetime.datetime(2025, 5, 17, 10, 0),  # 10:00
+            # 晚餐时间段
+            datetime.datetime(2025, 5, 17, 16, 30)  # 16:30
+        ]
+        
+        # 测试不允许的时间段
+        disallowed_times = [
+            datetime.datetime(2025, 5, 17, 7, 0),   # 07:00
+            datetime.datetime(2025, 5, 17, 12, 0),  # 12:00
+            datetime.datetime(2025, 5, 17, 20, 0)   # 20:00
+        ]
+        
+        # 测试允许的时间段
+        for test_time in allowed_times:
+            with patch('datetime.datetime') as mock_datetime:
+                # 模拟当前时间
+                mock_datetime.now.return_value = test_time
+                # 继续使用真实的datetime类型和方法
+                mock_datetime.side_effect = lambda *args, **kw: datetime.datetime(*args, **kw)
+                
+                # 创建模拟Socket
+                mock_socket = MockSocket(valid_card_request)
+                
+                # 处理客户端连接
+                http_reader.service_client(mock_socket)
+                
+                # 验证响应 - 应该成功
+                response = mock_socket.sent_data.decode('gbk')
+                self.assertTrue(response.startswith('Response=1,12345'))
+                self.assertIn(',10,5,', response)  # 成功蜂鸣代码
+                self.assertTrue(mock_socket.closed)
+        
+        # 测试不允许的时间段
+        for test_time in disallowed_times:
+            with patch('datetime.datetime') as mock_datetime:
+                # 模拟当前时间
+                mock_datetime.now.return_value = test_time
+                # 继续使用真实的datetime类型和方法
+                mock_datetime.side_effect = lambda *args, **kw: datetime.datetime(*args, **kw)
+                
+                # 创建模拟Socket
+                mock_socket = MockSocket(valid_card_request)
+                
+                # 处理客户端连接
+                http_reader.service_client(mock_socket)
+                
+                # 验证响应 - 应该失败
+                response = mock_socket.sent_data.decode('gbk')
+                self.assertTrue(response.startswith('Response=1,12345'))
+                self.assertIn(',10,7,', response)  # 失败蜂鸣代码
+                self.assertTrue(mock_socket.closed)
+                
+                # 验证失败记录表插入 - 应该是时间段错误(type=3)
+                self.cursor.execute('SELECT * FROM kbk_ic_failure_records WHERE failure_type = ?', (3,))
+                record = self.cursor.fetchone()
+                self.assertIsNotNone(record)
 
 
 if __name__ == '__main__':

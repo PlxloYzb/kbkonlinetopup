@@ -115,6 +115,11 @@ def init_database(db_file='ic_manager.db', with_sample_data=True):
                 'INSERT INTO kbk_ic_failure_records (failure_type, transaction_date) VALUES (?, ?)',
                 (2, current_time)  # 卡号不存在
             )
+            
+            cursor.execute(
+                'INSERT INTO kbk_ic_failure_records (user, department, failure_type, transaction_date) VALUES (?, ?, ?, ?)',
+                ('钱七', '行政部', 3, current_time)  # 时间段错误
+            )
         
         # 提交事务
         conn.commit()

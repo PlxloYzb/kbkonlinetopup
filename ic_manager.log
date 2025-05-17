@@ -6,3 +6,9 @@
 2025-05-17 13:29:41.f - WARNING - Card not found: 6506BE24
 2025-05-17 13:29:42.f - WARNING - Card not found: 6506BE24
 2025-05-17 13:29:43.f - WARNING - Card not found: 6506BE24
+2025-05-17 13:39:39.f - WARNING - Card not found: 6506BE24
+2025-05-17 13:45:37.f - INFO - Server stopping due to keyboard interrupt
+2025-05-17 13:45:37.f - INFO - Server stopped
+2025-05-17 13:45:40.f - INFO - Database initialized successfully
+2025-05-17 13:45:40.f - INFO - Server started, listening on port 99
+2025-05-17 13:45:47.f - WARNING - Card swiped outside allowed time periods: 6506BE24

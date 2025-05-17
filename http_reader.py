@@ -11,6 +11,13 @@ import time
 import datetime
 from logging.handlers import RotatingFileHandler
 import os
+from datetime import time as time_obj
+
+
+# 定义允许刷卡的时间段
+breakfast = (time_obj(3, 25), time_obj(5, 35))  # 03:25-05:35
+lunch = (time_obj(9, 20), time_obj(10, 35))     # 09:20-10:35
+dinner = (time_obj(14, 55), time_obj(17, 40))   # 14:55-17:40
 
 
 # 设置日志系统
@@ -117,10 +124,55 @@ def create_error_response(info, error_msg, beep_code=7):
     return response
 
 
+def is_time_within_allowed_periods(current_time):
+    """检查当前时间是否在允许的时间段内"""
+    # 获取当前时间的小时和分钟
+    time_now = time_obj(current_time.hour, current_time.minute)
+    
+    # 检查是否在任一允许的时间段内
+    return ((breakfast[0] <= time_now <= breakfast[1]) or
+            (lunch[0] <= time_now <= lunch[1]) or
+            (dinner[0] <= time_now <= dinner[1]))
+
+
 def process_card(card, jihao, info, dn=None):
     """处理刷卡业务逻辑"""
     conn = None
     try:
+        # 构造基本响应
+        response_base = f"Response=1,{info}"
+        
+        # 检查当前时间是否在允许的时间段内
+        current_time = datetime.datetime.now()
+        if not is_time_within_allowed_periods(current_time):
+            # 记录时间段错误
+            conn = sqlite3.connect('ic_manager.db')
+            conn.execute("PRAGMA busy_timeout = 5000")  # 5秒超时
+            cursor = conn.cursor()
+            
+            # 查询用户信息（如果卡存在）
+            cursor.execute('SELECT user, department FROM kbk_ic_manager WHERE card = ?', (card,))
+            result = cursor.fetchone()
+            
+            if result:
+                user, department = result
+                cursor.execute(
+                    'INSERT INTO kbk_ic_failure_records (user, department, failure_type, transaction_date) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
+                    (user, department, 3)  # 时间段错误
+                )
+            else:
+                cursor.execute(
+                    'INSERT INTO kbk_ic_failure_records (failure_type, transaction_date) VALUES (?, CURRENT_TIMESTAMP)',
+                    (3,)  # 时间段错误，卡不存在
+                )
+            
+            conn.commit()
+            logger.warning(f"Card swiped outside allowed time periods: {card}")
+            
+            # 构造失败响应
+            display_text = GetChineseCode("{错误}不在允许的用餐时间")
+            return f"{response_base},{display_text},10,7,,0,0"
+        
         # 连接数据库
         conn = sqlite3.connect('ic_manager.db')
         # 设置超时
@@ -135,8 +187,6 @@ def process_card(card, jihao, info, dn=None):
         cursor.execute('SELECT * FROM kbk_ic_manager WHERE card = ?', (card,))
         card_info = cursor.fetchone()
         
-        # 构造基本响应
-        response_base = f"Response=1,{info}"
         
         # 如果卡号不存在
         if not card_info:
@@ -353,7 +403,7 @@ def main():
         # 绑定端口并监听
         tcp_server_socket.bind(("", 99))  # 使用88端口，与读卡器默认端口一致
         tcp_server_socket.listen(128)
-        logger.info("Server started, listening on port 88")
+        logger.info("Server started, listening on port 99")
         
         # 主循环
         while True:
