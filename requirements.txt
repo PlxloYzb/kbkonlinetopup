@@ -1,11 +1,11 @@
-pandas
-schedule
-aiohttp
-prometheus_client
-aiosqlite
-watchdog
-openpyxl
+# IC卡刷卡管理系统依赖包
+# 本项目主要使用Python标准库，几乎不需要额外依赖
 
-# 根据需要取消注释以下数据库驱动中的一个或多个
-# aiomysql
-# asyncpg
+# 数据库
+sqlite3>=3.0.0
+
+# 单元测试
+unittest2>=1.1.0
+
+# 并发测试
+futures>=3.0.5; python_version < '3.2'

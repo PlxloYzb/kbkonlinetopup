@@ -1,211 +1,144 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
-import os
+"""
+IC卡刷卡管理系统数据库初始化脚本
+创建数据库表结构并插入示例数据
+"""
 import sqlite3
-import pandas as pd
-from datetime import datetime
+import os
+import datetime
+import argparse
 
-def create_database(db_path="test_database.db"):
-    """创建SQLite数据库和表结构"""
-    print(f"正在创建数据库: {db_path}")
-    
-    if os.path.exists(db_path):
-        print(f"数据库文件已存在，删除旧文件")
-        os.remove(db_path)
+
+def init_database(db_file='ic_manager.db', with_sample_data=True):
+    """初始化数据库"""
+    # 如果数据库文件已存在，询问是否覆盖
+    if os.path.exists(db_file) and not with_sample_data:
+        choice = input(f"数据库文件 {db_file} 已存在，是否覆盖? (y/n): ")
+        if choice.lower() != 'y':
+            print("操作已取消")
+            return False
     
     # 连接数据库
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_file)
     cursor = conn.cursor()
     
-    # 创建员工表
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS employees (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT NOT NULL UNIQUE,
-        name TEXT NOT NULL,
-        department TEXT NOT NULL,
-        position TEXT,
-        status INTEGER DEFAULT 0,
-        last_updated TIMESTAMP
-    )
-    ''')
-    
-    print("成功创建employees表")
-    
-    # 提交更改
-    conn.commit()
-    conn.close()
-    
-    return db_path
-
-def insert_sample_data(db_path):
-    """向数据库中添加示例数据"""
-    print(f"正在添加示例数据到数据库: {db_path}")
-    
-    # 连接数据库
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    
-    # 定义示例部门
-    departments = ["技术部", "运维部", "安全部", "产品部", "客服部"]
-    
-    # 为每个部门创建示例员工
-    employees_data = []
-    
-    # 技术部员工
-    for i in range(1, 11):
-        employees_data.append({
-            "username": f"tech{i}",
-            "name": f"技术员工{i}",
-            "department": "技术部",
-            "position": "工程师",
-            "status": 0
-        })
-    
-    # 运维部员工
-    for i in range(1, 8):
-        employees_data.append({
-            "username": f"ops{i}",
-            "name": f"运维员工{i}",
-            "department": "运维部",
-            "position": "运维工程师",
-            "status": 0
-        })
-    
-    # 安全部员工
-    for i in range(1, 6):
-        employees_data.append({
-            "username": f"sec{i}",
-            "name": f"安全员工{i}",
-            "department": "安全部",
-            "position": "安全工程师",
-            "status": 0
-        })
-    
-    # 产品部员工
-    for i in range(1, 4):
-        employees_data.append({
-            "username": f"prod{i}",
-            "name": f"产品员工{i}",
-            "department": "产品部",
-            "position": "产品经理",
-            "status": 0
-        })
-    
-    # 客服部员工
-    for i in range(1, 7):
-        employees_data.append({
-            "username": f"cs{i}",
-            "name": f"客服员工{i}",
-            "department": "客服部",
-            "position": "客服专员",
-            "status": 0
-        })
-    
-    # 添加员工数据
-    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    for employee in employees_data:
+    try:
+        # 创建卡片管理表
         cursor.execute('''
-        INSERT INTO employees (username, name, department, position, status, last_updated)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ''', (
-            employee["username"],
-            employee["name"],
-            employee["department"],
-            employee["position"],
-            employee["status"],
-            current_time
-        ))
-    
-    # 提交并关闭
-    conn.commit()
-    print(f"成功添加 {len(employees_data)} 条员工记录")
-    
-    # 验证数据
-    cursor.execute("SELECT COUNT(*) FROM employees")
-    count = cursor.fetchone()[0]
-    print(f"数据库中共有 {count} 条员工记录")
-    
-    cursor.execute("SELECT department, COUNT(*) FROM employees GROUP BY department")
-    dept_counts = cursor.fetchall()
-    print("各部门员工数量:")
-    for dept, count in dept_counts:
-        print(f"  {dept}: {count} 人")
-    
-    conn.close()
-
-def create_sample_excel(excel_folder="test_excel", file_name=None):
-    """创建示例Excel排班文件"""
-    if file_name is None:
-        # 使用当前日期作为文件名
-        file_name = datetime.now().strftime("%Y-%m-%d.xlsx")
-    
-    # 确保文件夹存在
-    if not os.path.exists(excel_folder):
-        os.makedirs(excel_folder)
-        print(f"创建文件夹: {excel_folder}")
-    
-    # 完整的文件路径
-    file_path = os.path.join(excel_folder, file_name)
-    
-    # 创建Excel writer
-    writer = pd.ExcelWriter(file_path, engine='openpyxl')
-    
-    # 为每个部门创建排班表
-    departments = ["技术部", "运维部", "安全部", "产品部", "客服部"]
-    
-    for dept in departments:
-        # 获取部门人数和员工前缀
-        if dept == "技术部":
-            count = 10
-            prefix = "tech"
-        elif dept == "运维部":
-            count = 7
-            prefix = "ops"
-        elif dept == "安全部":
-            count = 5
-            prefix = "sec"
-        elif dept == "产品部":
-            count = 3
-            prefix = "prod"
-        elif dept == "客服部":
-            count = 6
-            prefix = "cs"
+        CREATE TABLE IF NOT EXISTS kbk_ic_manager (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT NOT NULL,
+            card TEXT NOT NULL UNIQUE,
+            department TEXT NOT NULL,
+            status INTEGER NOT NULL DEFAULT 0,
+            last_updated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
         
-        # 创建排班数据
-        data = []
-        for i in range(1, count + 1):
-            # 随机安排值班情况 - 为了测试，我们设置一部分人为值班状态
-            is_on_duty = 1 if i % 3 == 0 else 0
-            shift = "ds" if i % 4 != 0 else "ns" if i % 4 == 0 else ""
+        # 创建卡号索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_card ON kbk_ic_manager(card)')
+        
+        # 创建计数表
+        for table in ['kbk_ic_en_count', 'kbk_ic_cn_count', 'kbk_ic_nm_count']:
+            cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS {table} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user TEXT NOT NULL,
+                department TEXT NOT NULL,
+                transaction_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            ''')
+        
+        # 创建失败记录表
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS kbk_ic_failure_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT,
+            department TEXT,
+            transaction_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            failure_type INTEGER NOT NULL
+        )
+        ''')
+        
+        # 如果需要，插入示例数据
+        if with_sample_data:
+            # 插入卡片数据
+            sample_cards = [
+                ('张三', 'A1B2C3D4', '技术部', 1),
+                ('李四', 'E5F6G7H8', '市场部', 1),
+                ('王五', 'I9J0K1L2', '财务部', 1),
+                ('赵六', 'M3N4O5P6', '人事部', 0),
+                ('钱七', 'Q7R8S9T0', '行政部', 0)
+            ]
             
-            data.append({
-                "user": f"{prefix}{i}",
-                "name": f"{dept}员工{i}",
-                "is_on_duty": is_on_duty,
-                "shift": shift
-            })
+            for card in sample_cards:
+                try:
+                    cursor.execute(
+                        'INSERT INTO kbk_ic_manager (user, card, department, status) VALUES (?, ?, ?, ?)',
+                        card
+                    )
+                except sqlite3.IntegrityError:
+                    # 如果卡号已存在，则更新
+                    cursor.execute(
+                        'UPDATE kbk_ic_manager SET user = ?, department = ?, status = ? WHERE card = ?',
+                        (card[0], card[2], card[3], card[1])
+                    )
+            
+            # 插入一些计数记录
+            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 中文计数表
+            cursor.execute(
+                'INSERT INTO kbk_ic_cn_count (user, department, transaction_date) VALUES (?, ?, ?)',
+                ('张三', '技术部', current_time)
+            )
+            
+            # 英文计数表
+            cursor.execute(
+                'INSERT INTO kbk_ic_en_count (user, department, transaction_date) VALUES (?, ?, ?)',
+                ('李四', '市场部', current_time)
+            )
+            
+            # 其他语言计数表
+            cursor.execute(
+                'INSERT INTO kbk_ic_nm_count (user, department, transaction_date) VALUES (?, ?, ?)',
+                ('王五', '财务部', current_time)
+            )
+            
+            # 失败记录表
+            cursor.execute(
+                'INSERT INTO kbk_ic_failure_records (user, department, failure_type, transaction_date) VALUES (?, ?, ?, ?)',
+                ('赵六', '人事部', 1, current_time)  # 未激活
+            )
+            
+            cursor.execute(
+                'INSERT INTO kbk_ic_failure_records (failure_type, transaction_date) VALUES (?, ?)',
+                (2, current_time)  # 卡号不存在
+            )
         
-        # 创建DataFrame并保存到Excel
-        df = pd.DataFrame(data)
-        df.to_excel(writer, sheet_name=dept, index=False)
-    
-    # 保存Excel文件
-    writer.close()
-    
-    print(f"成功创建排班Excel文件: {file_path}")
-    return file_path
+        # 提交事务
+        conn.commit()
+        print(f"数据库 {db_file} 初始化成功" + (" 并已插入示例数据" if with_sample_data else ""))
+        return True
+        
+    except sqlite3.Error as e:
+        # 发生错误时回滚事务
+        conn.rollback()
+        print(f"数据库错误: {e}")
+        return False
+        
+    finally:
+        # 关闭数据库连接
+        conn.close()
 
-if __name__ == "__main__":
-    # 创建数据库并添加示例数据
-    db_path = create_database()
-    insert_sample_data(db_path)
+
+if __name__ == '__main__':
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description='IC卡刷卡管理系统数据库初始化脚本')
+    parser.add_argument('-d', '--database', default='ic_manager.db', help='数据库文件名 (默认: ic_manager.db)')
+    parser.add_argument('-s', '--sample', action='store_true', help='插入示例数据')
     
-    # 创建示例Excel排班文件
-    excel_file = create_sample_excel()
+    args = parser.parse_args()
     
-    print(f"\n初始化完成!")
-    print(f"数据库路径: {os.path.abspath(db_path)}")
-    print(f"Excel文件路径: {os.path.abspath(excel_file)}")
-    print("\n您现在可以使用这些数据来测试status_update_server.py") 
+    # 初始化数据库
+    init_database(args.database, args.sample)
