@@ -1,0 +1,11 @@
+pandas
+schedule
+aiohttp
+prometheus_client
+aiosqlite
+watchdog
+openpyxl
+
+# 根据需要取消注释以下数据库驱动中的一个或多个
+# aiomysql
+# asyncpg
