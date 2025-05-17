@@ -260,35 +260,35 @@ class DutyUpdateService:
             conn.row_factory = aiosqlite.Row
             return conn
         
-        elif db_type == "mysql":
-            # MySQL连接
-            import aiomysql
-            pool = await aiomysql.create_pool(
-                host=self.db_config["host"],
-                port=self.db_config.get("port", 3306),
-                user=self.db_config["user"],
-                password=self.db_config["password"],
-                db=self.db_config["database"],
-                charset=self.db_config.get("charset", "utf8mb4"),
-                autocommit=False,
-                maxsize=self.db_config.get("pool_size", 10),
-                minsize=self.db_config.get("min_size", 1)
-            )
-            return pool
+        # elif db_type == "mysql":
+        #     # MySQL连接
+        #     import aiomysql
+        #     pool = await aiomysql.create_pool(
+        #         host=self.db_config["host"],
+        #         port=self.db_config.get("port", 3306),
+        #         user=self.db_config["user"],
+        #         password=self.db_config["password"],
+        #         db=self.db_config["database"],
+        #         charset=self.db_config.get("charset", "utf8mb4"),
+        #         autocommit=False,
+        #         maxsize=self.db_config.get("pool_size", 10),
+        #         minsize=self.db_config.get("min_size", 1)
+        #     )
+        #     return pool
             
-        elif db_type == "postgresql":
-            # PostgreSQL连接
-            import asyncpg
-            pool = await asyncpg.create_pool(
-                host=self.db_config["host"],
-                port=self.db_config.get("port", 5432),
-                user=self.db_config["user"],
-                password=self.db_config["password"],
-                database=self.db_config["database"],
-                min_size=self.db_config.get("min_size", 1),
-                max_size=self.db_config.get("pool_size", 10)
-            )
-            return pool
+        # elif db_type == "postgresql":
+        #     # PostgreSQL连接
+        #     import asyncpg
+        #     pool = await asyncpg.create_pool(
+        #         host=self.db_config["host"],
+        #         port=self.db_config.get("port", 5432),
+        #         user=self.db_config["user"],
+        #         password=self.db_config["password"],
+        #         database=self.db_config["database"],
+        #         min_size=self.db_config.get("min_size", 1),
+        #         max_size=self.db_config.get("pool_size", 10)
+        #     )
+        #     return pool
         
         else:
             raise ValueError(f"不支持的数据库类型: {db_type}")
@@ -404,32 +404,32 @@ class DutyUpdateService:
                 async with self.db_pool.cursor() as cursor:
                     for batch in batches:
                         placeholders = ','.join(['?'] * len(batch))
-                        query = f"UPDATE employees SET status = 1 WHERE username IN ({placeholders})"
+                        query = f"UPDATE kbk_ic_manager SET status = 1 WHERE user IN ({placeholders})"
                         await cursor.execute(query, batch)
                         total_updated += cursor.rowcount
                     await self.db_pool.commit()
                     
-            elif db_type == "mysql":
-                # MySQL批量更新
-                async with self.db_pool.acquire() as conn:
-                    async with conn.cursor() as cursor:
-                        for batch in batches:
-                            placeholders = ','.join(['%s'] * len(batch))
-                            query = f"UPDATE employees SET status = 1 WHERE username IN ({placeholders})"
-                            await cursor.execute(query, batch)
-                            total_updated += cursor.rowcount
-                        await conn.commit()
+            # elif db_type == "mysql":
+            #     # MySQL批量更新
+            #     async with self.db_pool.acquire() as conn:
+            #         async with conn.cursor() as cursor:
+            #             for batch in batches:
+            #                 placeholders = ','.join(['%s'] * len(batch))
+            #                 query = f"UPDATE employees SET status = 1 WHERE username IN ({placeholders})"
+            #                 await cursor.execute(query, batch)
+            #                 total_updated += cursor.rowcount
+            #             await conn.commit()
                         
-            elif db_type == "postgresql":
-                # PostgreSQL批量更新
-                async with self.db_pool.acquire() as conn:
-                    for batch in batches:
-                        placeholders = ','.join([f"${i+1}" for i in range(len(batch))])
-                        query = f"UPDATE employees SET status = 1 WHERE username IN ({placeholders})"
-                        result = await conn.execute(query, *batch)
-                        # PostgreSQL返回的结果格式为 "UPDATE X"，需要提取数字
-                        update_count = int(result.split()[1]) if result else 0
-                        total_updated += update_count
+            # elif db_type == "postgresql":
+            #     # PostgreSQL批量更新
+            #     async with self.db_pool.acquire() as conn:
+            #         for batch in batches:
+            #             placeholders = ','.join([f"${i+1}" for i in range(len(batch))])
+            #             query = f"UPDATE employees SET status = 1 WHERE username IN ({placeholders})"
+            #             result = await conn.execute(query, *batch)
+            #             # PostgreSQL返回的结果格式为 "UPDATE X"，需要提取数字
+            #             update_count = int(result.split()[1]) if result else 0
+            #             total_updated += update_count
                         
             return total_updated
             
@@ -463,44 +463,44 @@ class DutyUpdateService:
 # 使用示例
 if __name__ == "__main__":
     # 配置参数
-    excel_folder = "/path/to/excel/folder"
+    excel_folder = "./excel"
     
     # 支持多种数据库配置
     # SQLite 配置
     sqlite_config = {
         "type": "sqlite",
-        "path": "/path/to/database.db"
+        "path": "./ic_manager.db"
     }
     
-    # MySQL 配置
-    mysql_config = {
-        "type": "mysql",
-        "host": "localhost",
-        "port": 3306,
-        "user": "username",
-        "password": "password",
-        "database": "employees_db",
-        "charset": "utf8mb4",
-        "pool_size": 10
-    }
+    # # MySQL 配置
+    # mysql_config = {
+    #     "type": "mysql",
+    #     "host": "localhost",
+    #     "port": 3306,
+    #     "user": "username",
+    #     "password": "password",
+    #     "database": "employees_db",
+    #     "charset": "utf8mb4",
+    #     "pool_size": 10
+    # }
     
-    # PostgreSQL 配置
-    postgresql_config = {
-        "type": "postgresql",
-        "host": "localhost",
-        "port": 5432,
-        "user": "username",
-        "password": "password",
-        "database": "employees_db",
-        "pool_size": 10
-    }
+    # # PostgreSQL 配置
+    # postgresql_config = {
+    #     "type": "postgresql",
+    #     "host": "localhost",
+    #     "port": 5432,
+    #     "user": "username",
+    #     "password": "password",
+    #     "database": "employees_db",
+    #     "pool_size": 10
+    # }
     
     # 选择要使用的数据库配置
     db_config = sqlite_config  # 或 mysql_config 或 postgresql_config
     
     time_points = {
         "a": "08:00",
-        "b": "12:00", 
+        "b": "14:48", 
         "c": "18:00"
     }
     
