@@ -361,6 +361,7 @@ class DutyUpdateService:
                 user = row['user']
                 is_on_duty = row['is_on_duty']
                 shift = str(row['shift']).lower() if pd.notna(row['shift']) else ""
+                card = row['card'] if 'card' in row and pd.notna(row['card']) else None
                 
                 # 检查是否需要更新状态
                 if is_on_duty == 1:
@@ -373,7 +374,12 @@ class DutyUpdateService:
                         should_update = True
                         
                     if should_update:
-                        users_to_update.append(user)
+                        users_to_update.append({
+                            "user": user,
+                            "department": dept,
+                            "card": card,
+                            "status": 1
+                        })
             
             # 如果没有需要更新的用户，直接返回
             if not users_to_update:
@@ -391,7 +397,7 @@ class DutyUpdateService:
             raise
             
     async def batch_update_users(self, users):
-        """批量更新用户状态"""
+        """批量更新用户状态，不存在则插入，插入时带department、card、status字段，更新时也同步更新card、department、status（不处理is_on_duty）"""
         db_type = self.db_config.get("type", "sqlite").lower()
         total_updated = 0
         
@@ -403,12 +409,32 @@ class DutyUpdateService:
                 # SQLite批量更新
                 async with self.db_pool.cursor() as cursor:
                     for batch in batches:
-                        placeholders = ','.join(['?'] * len(batch))
-                        query = f"UPDATE kbk_ic_manager SET status = 1 WHERE user IN ({placeholders})"
-                        await cursor.execute(query, batch)
-                        total_updated += cursor.rowcount
+                        user_names = [u["user"] for u in batch]
+                        # 依次更新每个用户的所有字段（不处理is_on_duty）
+                        updated_count = 0
+                        for u in batch:
+                            await cursor.execute(
+                                "UPDATE kbk_ic_manager SET card = ?, department = ?, status = ? WHERE user = ?",
+                                (u["card"], u["department"], u["status"], u["user"])
+                            )
+                            updated_count += cursor.rowcount
+                        total_updated += updated_count
+                        
+                        # 查找未被更新的用户（即数据库不存在的用户）
+                        if updated_count < len(user_names):
+                            placeholders = ','.join(['?'] * len(user_names))
+                            await cursor.execute(f"SELECT user FROM kbk_ic_manager WHERE user IN ({placeholders})", user_names)
+                            exist_users = set([row[0] for row in await cursor.fetchall()])
+                            to_insert = [u for u in batch if u["user"] not in exist_users]
+                            for u in to_insert:
+                                # 插入新用户（不处理is_on_duty）
+                                await cursor.execute(
+                                    "INSERT INTO kbk_ic_manager (user, card, department, status) VALUES (?, ?, ?, ?)",
+                                    (u["user"], u["card"], u["department"], u["status"])
+                                )
+                                total_updated += 1
                     await self.db_pool.commit()
-                    
+            
             # elif db_type == "mysql":
             #     # MySQL批量更新
             #     async with self.db_pool.acquire() as conn:
@@ -500,7 +526,7 @@ if __name__ == "__main__":
     
     time_points = {
         "a": "08:00",
-        "b": "14:48", 
+        "b": "15:10", 
         "c": "18:00"
     }
     
