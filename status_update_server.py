@@ -46,7 +46,7 @@ class ExcelFileHandler(watchdog.events.FileSystemEventHandler):
                 self.service.reload_excel()
 
 class DutyUpdateService:
-    def __init__(self, excel_folder, db_config, time_points, cache_size=10, batch_size=100, max_workers=4, monitor_port=8000):
+    def __init__(self, excel_folder, db_config, time_points, cache_size=500, batch_size=100, max_workers=4, monitor_port=5551):
         """
         初始化服务
         excel_folder: Excel文件存储路径
@@ -525,9 +525,9 @@ if __name__ == "__main__":
     db_config = sqlite_config  # 或 mysql_config 或 postgresql_config
     
     time_points = {
-        "a": "08:00",
-        "b": "15:10", 
-        "c": "18:00"
+        "a": "03:25",
+        "b": "09:25", 
+        "c": "14:55"
     }
     
     # 创建并启动HTTP服务器来提供健康状态API
@@ -538,10 +538,10 @@ if __name__ == "__main__":
         
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, 'localhost', 8080)
+        site = web.TCPSite(runner, 'localhost', 5552)
         
         await site.start()
-        logger.info("HTTP服务器已启动在端口 8080")
+        logger.info("HTTP服务器已启动在端口 5552")
     
     # 创建服务实例
     service = DutyUpdateService(excel_folder, db_config, time_points, 

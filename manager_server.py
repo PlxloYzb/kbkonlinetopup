@@ -197,12 +197,12 @@ def get_counts():
     result = []
 
     # 定义时段
-    morning_start = time_obj(5, 25)
-    morning_end = time_obj(7, 40)
-    noon_start = time_obj(11, 25)
-    noon_end = time_obj(12, 40)
-    evening_start = time_obj(16, 55)
-    evening_end = time_obj(19, 40)
+    morning_start = time_obj(3, 25)
+    morning_end = time_obj(5, 40)
+    noon_start = time_obj(9, 25)
+    noon_end = time_obj(10, 40)
+    evening_start = time_obj(14, 55)
+    evening_end = time_obj(17, 40)
 
     for table in table_names:
         sql = f"SELECT transaction_date FROM {table} WHERE 1=1"
@@ -297,7 +297,7 @@ def upload_excel():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='ICmanager 管理界面服务器')
-    parser.add_argument('-p', '--port', type=int, default=5000, help='指定服务器端口（默认5000）')
+    parser.add_argument('-p', '--port', type=int, default=5550, help='指定服务器端口（默认5550）')
     args = parser.parse_args()
     # 监听所有IP，外网可访问
     app.run(host='0.0.0.0', port=args.port, debug=True)

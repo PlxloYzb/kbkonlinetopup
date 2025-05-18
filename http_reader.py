@@ -401,7 +401,7 @@ def main():
     
     try:
         # 绑定端口并监听
-        tcp_server_socket.bind(("", 99))  # 使用88端口，与读卡器默认端口一致
+        tcp_server_socket.bind(("", 99))  # 使用99端口，与读卡器默认端口一致
         tcp_server_socket.listen(128)
         logger.info("Server started, listening on port 99")
         
