@@ -149,9 +149,18 @@ class DutyUpdateService:
                 self.latest_excel = newest_file
                 self.current_file_hash = new_hash
                 self.health_status["latest_excel"] = newest_file
-                
                 # 清除缓存
                 self.get_sheet_data.cache_clear()
+                # 检测到新文件后，立即触发一次数据库状态更新
+                try:
+                    self.trigger_update()
+                except Exception as e:
+                    logger.error(f"自动触发数据库状态更新失败: {str(e)}")
+                
+                # 立即触发一次数据库更新（对所有时间点）
+                logger.info("Excel文件已更新，立即触发一次数据库更新")
+                for time_point in self.time_points.keys():
+                    self.executor.submit(self.run_async_update, time_point)
                 
         except Exception as e:
             ERROR_COUNT.labels(type='file_check').inc()
@@ -199,14 +208,29 @@ class DutyUpdateService:
         except ValueError:
             return False
             
-    def trigger_update(self, time_point):
-        """触发异步更新任务"""
+    def get_time_point_by_now(self):
+        """根据当前时间判断应使用哪个时间点标识（a、b、c）"""
+        now = datetime.now().time()
+        a_time = datetime.strptime(self.time_points["a"], "%H:%M").time()
+        b_time = datetime.strptime(self.time_points["b"], "%H:%M").time()
+        c_time = datetime.strptime(self.time_points["c"], "%H:%M").time()
+        if now < a_time:
+            return "a"
+        elif a_time <= now < b_time:
+            return "b"
+        elif b_time <= now < c_time:
+            return "c"
+        else:
+            # 超过c点后不再有区间，可根据实际业务返回None或c，这里返回None
+            return "a"
+    def trigger_update(self, time_point=None):
+        """触发异步更新任务，支持自动判断时间点"""
+        if time_point is None:
+            time_point = self.get_time_point_by_now()
         REQUEST_COUNT.labels(time_point=time_point).inc()
         logger.info(f"触发时间点 {time_point} 的更新任务")
-        
-        # 使用线程池执行异步任务
         self.executor.submit(self.run_async_update, time_point)
-        return schedule.CancelJob  # 如果需要按周循环，移除此行
+        return schedule.CancelJob
         
     def run_async_update(self, time_point):
         """在线程池中运行异步更新任务"""
@@ -373,9 +397,9 @@ class DutyUpdateService:
                     # 值班状态为1时，根据班次和时间点决定是否更新
                     should_update = False
                     
-                    if shift in ['ds', 'lds'] and time_point in ['a', 'b', 'c']:
+                    if shift in ['ns', 'lds'] and time_point in ['a', 'b', 'c']:
                         should_update = True
-                    elif shift == 'ns' and time_point in ['a', 'c']:
+                    elif shift == 'ds' and time_point in ['a', 'c']:
                         should_update = True
                         
                     if should_update:
@@ -414,13 +438,12 @@ class DutyUpdateService:
         """批量更新用户状态，不存在则插入，插入时带department、card、status字段，更新时也同步更新card、department、status（不处理is_on_duty）"""
         db_type = self.db_config.get("type", "sqlite").lower()
         total_updated = 0
-        
         # 将用户列表分成批次
         batches = [users[i:i+self.batch_size] for i in range(0, len(users), self.batch_size)]
-        
         try:
             if db_type == "sqlite":
                 # SQLite批量更新
+                # 将 cursor 操作和 commit 分开
                 async with self.db_pool.cursor() as cursor:
                     for batch in batches:
                         user_names = [u["user"] for u in batch]
@@ -433,16 +456,13 @@ class DutyUpdateService:
                             )
                             updated_count += cursor.rowcount
                         total_updated += updated_count
-                        
                         # 查找未被更新的用户（即数据库不存在的用户）
                         if updated_count < len(user_names):
                             placeholders = ','.join(['?'] * len(user_names))
                             await cursor.execute(f"SELECT user FROM kbk_ic_manager WHERE user IN ({placeholders})", user_names)
                             exist_users = set([row[0] for row in await cursor.fetchall()])
-                            
                             # 只对没有update_only标记的用户执行插入操作
                             to_insert = [u for u in batch if u["user"] not in exist_users and not u.get("update_only", False)]
-                            
                             for u in to_insert:
                                 # 插入新用户（不处理is_on_duty）
                                 await cursor.execute(
@@ -450,45 +470,17 @@ class DutyUpdateService:
                                     (u["user"], u["card"], u["department"], u["status"])
                                 )
                                 total_updated += 1
-                                
                             # 记录日志：标记为update_only但未找到的用户
                             update_only_users = [u["user"] for u in batch if u["user"] not in exist_users and u.get("update_only", False)]
                             if update_only_users:
                                 logger.info(f"跳过插入update_only标记的用户: {', '.join(update_only_users)}")
-                    await self.db_pool.commit()
-            
-            # elif db_type == "mysql":
-            #     # MySQL批量更新
-            #     async with self.db_pool.acquire() as conn:
-            #         async with conn.cursor() as cursor:
-            #             for batch in batches:
-            #                 placeholders = ','.join(['%s'] * len(batch))
-            #                 query = f"UPDATE employees SET status = 1 WHERE username IN ({placeholders})"
-            #                 await cursor.execute(query, batch)
-            #                 total_updated += cursor.rowcount
-            #             await conn.commit()
-                        
-            # elif db_type == "postgresql":
-            #     # PostgreSQL批量更新
-            #     async with self.db_pool.acquire() as conn:
-            #         for batch in batches:
-            #             placeholders = ','.join([f"${i+1}" for i in range(len(batch))])
-            #             query = f"UPDATE employees SET status = 1 WHERE username IN ({placeholders})"
-            #             result = await conn.execute(query, *batch)
-            #             # PostgreSQL返回的结果格式为 "UPDATE X"，需要提取数字
-            #             update_count = int(result.split()[1]) if result else 0
-            #             total_updated += update_count
-                        
+                # commit 操作移到 cursor 上下文管理器外面
+                await self.db_pool.commit()
+            else:
+                raise ValueError(f"不支持的数据库类型: {db_type}")
             return total_updated
-            
         except Exception as e:
             logger.error(f"批量更新用户时出错: {str(e)}")
-            # 回滚事务
-            if db_type == "sqlite":
-                await self.db_pool.rollback()
-            elif db_type in ["mysql", "postgresql"]:
-                if 'conn' in locals():
-                    await conn.rollback()
             raise
         
     async def get_health(self, request):
@@ -549,7 +541,7 @@ if __name__ == "__main__":
     time_points = {
         "a": "03:25",
         "b": "09:25", 
-        "c": "14:55"
+        "c": "20:24"
     }
     
     # 创建并启动HTTP服务器来提供健康状态API
