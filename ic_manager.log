@@ -23,3 +23,38 @@
 2025-05-18 18:16:54.f - WARNING - Card swiped outside allowed time periods: 6506BE24
 2025-05-18 18:22:08.f - INFO - Server stopping due to keyboard interrupt
 2025-05-18 18:22:08.f - INFO - Server stopped
+2025-05-19 09:05:47.f - INFO - Database initialized successfully
+2025-05-19 09:05:47.f - INFO - Server started, listening on port 99
+2025-05-19 09:05:52.f - INFO - Card processed successfully: 6506BE24, User: Bruce, Jihao: 1
+2025-05-19 09:07:03.f - WARNING - Card inactive: 6506BE24, User: Bruce
+2025-05-19 09:07:04.f - WARNING - Card inactive: 6506BE24, User: Bruce
+2025-05-19 09:07:06.f - WARNING - Card inactive: 6506BE24, User: Bruce
+2025-05-19 09:20:05.f - INFO - Server stopping due to keyboard interrupt
+2025-05-19 09:20:05.f - INFO - Server stopped
+2025-05-19 09:20:07.f - INFO - Database initialized successfully
+2025-05-19 09:20:07.f - INFO - Server started, listening on port 99
+2025-05-19 09:20:14.f - WARNING - Card not found: B4AD78A7
+2025-05-19 09:20:38.f - INFO - Server stopping due to keyboard interrupt
+2025-05-19 09:20:38.f - INFO - Server stopped
+2025-05-19 09:20:41.f - INFO - Database initialized successfully
+2025-05-19 09:20:41.f - INFO - Server started, listening on port 99
+2025-05-19 09:20:43.f - WARNING - Card not found: B4AD78A7
+2025-05-19 09:20:53.f - INFO - Server stopping due to keyboard interrupt
+2025-05-19 09:20:53.f - INFO - Server stopped
+2025-05-19 09:21:04.f - INFO - Database initialized successfully
+2025-05-19 09:21:04.f - INFO - Server started, listening on port 99
+2025-05-19 09:21:06.f - WARNING - Card not found: B4AD78A7
+2025-05-19 09:21:07.f - WARNING - Card not found: B4AD78A7
+2025-05-19 09:21:19.f - WARNING - Card not found: B4AD78A7
+2025-05-19 09:21:35.f - WARNING - Card not found: B4AD78A7
+2025-05-19 09:23:08.f - INFO - Server stopping due to keyboard interrupt
+2025-05-19 09:23:08.f - INFO - Server stopped
+2025-05-19 09:23:09.f - INFO - Database initialized successfully
+2025-05-19 09:23:09.f - INFO - Server started, listening on port 99
+2025-05-19 09:23:16.f - WARNING - Card inactive: 6506BE24, User: Bruce
+2025-05-19 09:23:35.f - INFO - Card processed successfully: 6506BE24, User: Bruce, Jihao: 1
+2025-05-19 09:30:02.f - INFO - Server stopping due to keyboard interrupt
+2025-05-19 09:30:02.f - INFO - Server stopped
+2025-05-19 09:30:54.f - INFO - Database initialized successfully
+2025-05-19 09:30:54.f - INFO - Server started, listening on port 99
+2025-05-19 09:31:04.f - INFO - Card processed successfully: 6506BE24, User: Bruce, Jihao: 1

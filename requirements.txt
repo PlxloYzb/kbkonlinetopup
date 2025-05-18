@@ -1,15 +1,11 @@
-# IC卡刷卡管理系统依赖包
-# 本项目主要使用Python标准库，几乎不需要额外依赖
-
-# 数据库
-sqlite3>=3.0.0
-
-# 单元测试
 unittest2>=1.1.0
-
-# 并发测试
-futures>=3.0.5; python_version < '3.2'
-
+futures>=3.0.5; python_version < "3.4"
 openpyxl
 flask
 sqlite3
+pandas
+schedule
+aiohttp
+watchdog
+prometheus-client
+flask-cors

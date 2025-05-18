@@ -15,7 +15,7 @@ from datetime import time as time_obj
 
 
 # 定义允许刷卡的时间段
-breakfast = (time_obj(3, 25), time_obj(5, 35))  # 03:25-05:35
+breakfast = (time_obj(3, 25), time_obj(9, 19))  # 03:25-05:35
 lunch = (time_obj(9, 20), time_obj(10, 35))     # 09:20-10:35
 dinner = (time_obj(14, 55), time_obj(17, 40))   # 14:55-17:40
 
@@ -58,6 +58,8 @@ card_lock = threading.Lock()
 def init_database():
     """初始化数据库结构"""
     conn = sqlite3.connect('ic_manager.db')
+    # 设置数据库连接以使用本地时区
+    conn.execute("PRAGMA timezone='localtime'")
     cursor = conn.cursor()
     
     # 创建卡片管理表
@@ -135,6 +137,10 @@ def is_time_within_allowed_periods(current_time):
             (dinner[0] <= time_now <= dinner[1]))
 
 
+def get_local_timestamp():
+    """获取本地时区的时间戳字符串"""
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 def process_card(card, jihao, info, dn=None):
     """处理刷卡业务逻辑"""
     conn = None
@@ -157,13 +163,13 @@ def process_card(card, jihao, info, dn=None):
             if result:
                 user, department = result
                 cursor.execute(
-                    'INSERT INTO kbk_ic_failure_records (user, department, failure_type, transaction_date) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-                    (user, department, 3)  # 时间段错误
+                    'INSERT INTO kbk_ic_failure_records (user, department, failure_type, transaction_date) VALUES (?, ?, ?, ?)',
+                    (user, department, 3, get_local_timestamp())  # 时间段错误
                 )
             else:
                 cursor.execute(
-                    'INSERT INTO kbk_ic_failure_records (failure_type, transaction_date) VALUES (?, CURRENT_TIMESTAMP)',
-                    (3,)  # 时间段错误，卡不存在
+                    'INSERT INTO kbk_ic_failure_records (failure_type, transaction_date) VALUES (?, ?)',
+                    (3, get_local_timestamp())  # 时间段错误，卡不存在
                 )
             
             conn.commit()
@@ -171,7 +177,7 @@ def process_card(card, jihao, info, dn=None):
             
             # 构造失败响应
             display_text = GetChineseCode("{错误}不在允许的用餐时间")
-            return f"{response_base},{display_text},10,7,,0,0"
+            return f"{response_base},{display_text},10,0,,0,0"
         
         # 连接数据库
         conn = sqlite3.connect('ic_manager.db')
@@ -192,15 +198,15 @@ def process_card(card, jihao, info, dn=None):
         if not card_info:
             # 记录失败信息
             cursor.execute(
-                'INSERT INTO kbk_ic_failure_records (failure_type, transaction_date) VALUES (?, CURRENT_TIMESTAMP)',
-                (2,)  # 卡号不存在
+                'INSERT INTO kbk_ic_failure_records (failure_type, transaction_date) VALUES (?, ?)',
+                (2, get_local_timestamp())  # 卡号不存在
             )
             conn.commit()
             logger.warning(f"Card not found: {card}")
             
             # 构造失败响应
             display_text = GetChineseCode("{错误}卡号不存在")
-            return f"{response_base},{display_text},10,7,,0,0"
+            return f"{response_base},{display_text},10,0,,0,0"
         
         # 获取卡片信息
         user = card_info['user']
@@ -211,20 +217,20 @@ def process_card(card, jihao, info, dn=None):
         if status != 1:
             # 记录失败信息
             cursor.execute(
-                'INSERT INTO kbk_ic_failure_records (user, department, failure_type, transaction_date) VALUES (?, ?, ?, CURRENT_TIMESTAMP)',
-                (user, department, 1)  # 未激活
+                'INSERT INTO kbk_ic_failure_records (user, department, failure_type, transaction_date) VALUES (?, ?, ?, ?)',
+                (user, department, 1, get_local_timestamp())  # 未激活
             )
             conn.commit()
             logger.warning(f"Card inactive: {card}, User: {user}")
             
             # 构造失败响应
             display_text = GetChineseCode("{失败}卡片未激活")
-            return f"{response_base},{display_text},10,7,,0,0"
+            return f"{response_base},{display_text},10,0,,0,0"
         
         # 卡片有效，更新状态
         cursor.execute(
-            'UPDATE kbk_ic_manager SET status = 0, last_updated = CURRENT_TIMESTAMP WHERE card = ?',
-            (card,)
+            'UPDATE kbk_ic_manager SET status = 0, last_updated = ? WHERE card = ?',
+            (get_local_timestamp(), card)
         )
         
         # 根据jihao插入对应计数表
@@ -238,8 +244,8 @@ def process_card(card, jihao, info, dn=None):
         
         if count_table:
             cursor.execute(
-                f'INSERT INTO {count_table} (user, department, transaction_date) VALUES (?, ?, CURRENT_TIMESTAMP)',
-                (user, department)
+                f'INSERT INTO {count_table} (user, department, transaction_date) VALUES (?, ?, ?)',
+                (user, department, get_local_timestamp())
             )
         
         # 提交事务
@@ -251,7 +257,7 @@ def process_card(card, jihao, info, dn=None):
         display_text = GetChineseCode("{成功}") + user + " " + department
         voice_text = GetChineseCode("[v8]刷卡成功")
         
-        return f"{response_base},{display_text},10,5,{voice_text},0,0"
+        return f"{response_base},{display_text},10,2,{voice_text},0,0"
         
     except sqlite3.Error as e:
         # 发生错误时回滚事务
@@ -259,7 +265,7 @@ def process_card(card, jihao, info, dn=None):
             conn.rollback()
         logger.error(f"Database error: {e}")
         display_text = GetChineseCode("{错误}系统异常")
-        return f"{response_base},{display_text},10,7,,0,0"
+        return f"{response_base},{display_text},10,0,,0,0"
         
     finally:
         # 关闭数据库连接
@@ -373,12 +379,14 @@ def update_card_status(card, new_status):
         try:
             # 设置超时
             conn.execute("PRAGMA busy_timeout = 5000")  # 5秒超时
+            # 设置数据库连接以使用本地时区
+            conn.execute("PRAGMA timezone='localtime'")
             # 使用事务保证原子性
             conn.execute('BEGIN IMMEDIATE TRANSACTION')  # IMMEDIATE提供写锁
             cursor = conn.cursor()
             cursor.execute(
-                'UPDATE kbk_ic_manager SET status = ?, last_updated = CURRENT_TIMESTAMP WHERE card = ?',
-                (new_status, card)
+                'UPDATE kbk_ic_manager SET status = ?, last_updated = ? WHERE card = ?',
+                (new_status, get_local_timestamp(), card)
             )
             conn.commit()
             return True
