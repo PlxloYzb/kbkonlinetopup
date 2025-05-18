@@ -182,6 +182,11 @@ class DutyUpdateService:
                 # 清除缓存
                 self.get_sheet_data.cache_clear()
                 
+                # 立即触发一次数据库更新（对所有时间点）
+                logger.info("Excel文件已更新，立即触发一次数据库更新")
+                for time_point in self.time_points.keys():
+                    self.executor.submit(self.run_async_update, time_point)
+                
         except Exception as e:
             ERROR_COUNT.labels(type='file_reload').inc()
             logger.error(f"重新加载Excel文件时出错: {str(e)}")
@@ -363,11 +368,11 @@ class DutyUpdateService:
                 shift = str(row['shift']).lower() if pd.notna(row['shift']) else ""
                 card = row['card'] if 'card' in row and pd.notna(row['card']) else None
                 
-                # 检查是否需要更新状态
+                # 分开处理值班状态为1和0的情况
                 if is_on_duty == 1:
+                    # 值班状态为1时，根据班次和时间点决定是否更新
                     should_update = False
                     
-                    # 根据班次和时间点决定是否更新
                     if shift in ['ds', 'lds'] and time_point in ['a', 'b', 'c']:
                         should_update = True
                     elif shift == 'ns' and time_point in ['a', 'c']:
@@ -380,6 +385,15 @@ class DutyUpdateService:
                             "card": card,
                             "status": 1
                         })
+                elif is_on_duty == 0:
+                    # 值班状态为0时，将状态更新为0（仅执行更新操作，不执行插入）
+                    users_to_update.append({
+                        "user": user,
+                        "department": dept,
+                        "card": card,
+                        "status": 0,
+                        "update_only": True  # 标记仅执行更新，不执行插入
+                    })
             
             # 如果没有需要更新的用户，直接返回
             if not users_to_update:
@@ -425,7 +439,10 @@ class DutyUpdateService:
                             placeholders = ','.join(['?'] * len(user_names))
                             await cursor.execute(f"SELECT user FROM kbk_ic_manager WHERE user IN ({placeholders})", user_names)
                             exist_users = set([row[0] for row in await cursor.fetchall()])
-                            to_insert = [u for u in batch if u["user"] not in exist_users]
+                            
+                            # 只对没有update_only标记的用户执行插入操作
+                            to_insert = [u for u in batch if u["user"] not in exist_users and not u.get("update_only", False)]
+                            
                             for u in to_insert:
                                 # 插入新用户（不处理is_on_duty）
                                 await cursor.execute(
@@ -433,6 +450,11 @@ class DutyUpdateService:
                                     (u["user"], u["card"], u["department"], u["status"])
                                 )
                                 total_updated += 1
+                                
+                            # 记录日志：标记为update_only但未找到的用户
+                            update_only_users = [u["user"] for u in batch if u["user"] not in exist_users and u.get("update_only", False)]
+                            if update_only_users:
+                                logger.info(f"跳过插入update_only标记的用户: {', '.join(update_only_users)}")
                     await self.db_pool.commit()
             
             # elif db_type == "mysql":

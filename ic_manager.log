@@ -12,3 +12,14 @@
 2025-05-17 13:45:40.f - INFO - Database initialized successfully
 2025-05-17 13:45:40.f - INFO - Server started, listening on port 99
 2025-05-17 13:45:47.f - WARNING - Card swiped outside allowed time periods: 6506BE24
+2025-05-18 17:57:44.f - INFO - Database initialized successfully
+2025-05-18 17:57:44.f - INFO - Server started, listening on port 99
+2025-05-18 17:57:47.f - INFO - Server stopping due to keyboard interrupt
+2025-05-18 17:57:47.f - INFO - Server stopped
+2025-05-18 18:16:47.f - INFO - Database initialized successfully
+2025-05-18 18:16:47.f - INFO - Server started, listening on port 99
+2025-05-18 18:16:50.f - WARNING - Card swiped outside allowed time periods: 6506BE24
+2025-05-18 18:16:52.f - WARNING - Card swiped outside allowed time periods: 6506BE24
+2025-05-18 18:16:54.f - WARNING - Card swiped outside allowed time periods: 6506BE24
+2025-05-18 18:22:08.f - INFO - Server stopping due to keyboard interrupt
+2025-05-18 18:22:08.f - INFO - Server stopped
