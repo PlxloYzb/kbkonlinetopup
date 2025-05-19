@@ -60,3 +60,49 @@
 2025-05-19 09:31:04.f - INFO - Card processed successfully: 6506BE24, User: Bruce, Jihao: 1
 2025-05-19 09:50:48.f - INFO - Card processed successfully: 6506BE24, User: Bruce, Jihao: 1
 2025-05-19 09:51:12.f - WARNING - Card inactive: 6506BE24, User: Bruce
+2025-05-19 11:22:38.f - INFO - [DB] 连接数据库: ic_manager.db
+2025-05-19 11:22:38.f - INFO - [DB] 创建表: kbk_ic_manager
+2025-05-19 11:22:38.f - INFO - [DB] 创建索引: idx_card ON kbk_ic_manager(card)
+2025-05-19 11:22:38.f - INFO - [DB] 创建表: kbk_ic_en_count
+2025-05-19 11:22:38.f - INFO - [DB] 创建表: kbk_ic_cn_count
+2025-05-19 11:22:38.f - INFO - [DB] 创建表: kbk_ic_nm_count
+2025-05-19 11:22:38.f - INFO - [DB] 创建表: kbk_ic_failure_records
+2025-05-19 11:22:38.f - INFO - [DB] 数据库初始化完成并已提交更改
+2025-05-19 11:22:38.f - INFO - Database initialized successfully
+2025-05-19 11:22:38.f - INFO - Server started, listening on port 99
+2025-05-19 11:24:11.f - INFO - Server stopping due to keyboard interrupt
+2025-05-19 11:24:11.f - INFO - Server stopped
+2025-05-19 11:24:12.f - INFO - [SYS] 脚本启动，准备初始化数据库
+2025-05-19 11:24:12.f - INFO - [DB] 连接数据库: ic_manager.db
+2025-05-19 11:24:12.f - INFO - [DB] 创建表: kbk_ic_manager
+2025-05-19 11:24:12.f - INFO - [DB] 创建索引: idx_card ON kbk_ic_manager(card)
+2025-05-19 11:24:12.f - INFO - [DB] 创建表: kbk_ic_en_count
+2025-05-19 11:24:12.f - INFO - [DB] 创建表: kbk_ic_cn_count
+2025-05-19 11:24:12.f - INFO - [DB] 创建表: kbk_ic_nm_count
+2025-05-19 11:24:12.f - INFO - [DB] 创建表: kbk_ic_failure_records
+2025-05-19 11:24:12.f - INFO - [DB] 数据库初始化完成并已提交更改
+2025-05-19 11:24:12.f - INFO - Database initialized successfully
+2025-05-19 11:24:12.f - INFO - [SYS] 数据库初始化完成
+2025-05-19 11:24:12.f - INFO - [SYS] 创建TCP服务器套接字
+2025-05-19 11:24:12.f - INFO - [SYS] 绑定端口99，准备监听
+2025-05-19 11:24:12.f - INFO - [SYS] 服务器启动成功，监听端口99，等待连接
+2025-05-19 11:24:12.f - INFO - [SYS] 等待新连接...
+2025-05-19 11:25:42.f - INFO - [SYS] 检测到键盘中断，服务器即将停止
+2025-05-19 11:25:42.f - INFO - [SYS] 服务器已关闭
+2025-05-19 11:25:43.f - INFO - [SYS] 脚本启动，准备初始化数据库
+2025-05-19 11:25:43.f - INFO - [DB] 连接数据库: ic_manager.db
+2025-05-19 11:25:43.f - INFO - [DB] 创建表: kbk_ic_manager
+2025-05-19 11:25:43.f - INFO - [DB] 创建索引: idx_card ON kbk_ic_manager(card)
+2025-05-19 11:25:43.f - INFO - [DB] 创建表: kbk_ic_en_count
+2025-05-19 11:25:43.f - INFO - [DB] 创建表: kbk_ic_cn_count
+2025-05-19 11:25:43.f - INFO - [DB] 创建表: kbk_ic_nm_count
+2025-05-19 11:25:43.f - INFO - [DB] 创建表: kbk_ic_failure_records
+2025-05-19 11:25:43.f - INFO - [DB] 数据库初始化完成并已提交更改
+2025-05-19 11:25:43.f - INFO - Database initialized successfully
+2025-05-19 11:25:43.f - INFO - [SYS] 数据库初始化完成
+2025-05-19 11:25:43.f - INFO - [SYS] 创建TCP服务器套接字
+2025-05-19 11:25:43.f - INFO - [SYS] 绑定端口99，准备监听
+2025-05-19 11:25:43.f - INFO - [SYS] 服务器启动成功，监听端口99，等待连接
+2025-05-19 11:25:43.f - INFO - [SYS] 等待新连接...
+2025-05-19 11:25:49.f - INFO - [SYS] 检测到键盘中断，服务器即将停止
+2025-05-19 11:25:49.f - INFO - [SYS] 服务器已关闭

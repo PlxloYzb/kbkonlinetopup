@@ -44,6 +44,12 @@ def setup_logging():
     # 添加处理器到logger
     logger.addHandler(handler)
     
+    # 添加控制台日志处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
     return logger
 
 
@@ -57,12 +63,14 @@ card_lock = threading.Lock()
 
 def init_database():
     """初始化数据库结构"""
+    logger.info("[DB] 连接数据库: ic_manager.db")
     conn = sqlite3.connect('ic_manager.db')
     # 设置数据库连接以使用本地时区
     conn.execute("PRAGMA timezone='localtime'")
     cursor = conn.cursor()
     
     # 创建卡片管理表
+    logger.info("[DB] 创建表: kbk_ic_manager")
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS kbk_ic_manager (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,10 +83,12 @@ def init_database():
     ''')
     
     # 创建卡号索引
+    logger.info("[DB] 创建索引: idx_card ON kbk_ic_manager(card)")
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_card ON kbk_ic_manager(card)')
     
     # 创建计数表
     for table in ['kbk_ic_en_count', 'kbk_ic_cn_count', 'kbk_ic_nm_count']:
+        logger.info(f"[DB] 创建表: {table}")
         cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS {table} (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -89,6 +99,7 @@ def init_database():
         ''')
     
     # 创建失败记录表
+    logger.info("[DB] 创建表: kbk_ic_failure_records")
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS kbk_ic_failure_records (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,6 +111,7 @@ def init_database():
     ''')
     
     conn.commit()
+    logger.info("[DB] 数据库初始化完成并已提交更改")
     conn.close()
     logger.info("Database initialized successfully")
 
@@ -145,6 +157,7 @@ def process_card(card, jihao, info, dn=None):
     """处理刷卡业务逻辑"""
     conn = None
     try:
+        logger.info(f"[DB] 开始处理刷卡: card={card}, jihao={jihao}, info={info}, dn={dn}")
         # 构造基本响应
         response_base = f"Response=1,{info}"
         
@@ -152,34 +165,35 @@ def process_card(card, jihao, info, dn=None):
         current_time = datetime.datetime.now()
         if not is_time_within_allowed_periods(current_time):
             # 记录时间段错误
+            logger.info("[DB] 连接数据库: ic_manager.db")
             conn = sqlite3.connect('ic_manager.db')
             conn.execute("PRAGMA busy_timeout = 5000")  # 5秒超时
             cursor = conn.cursor()
-            
             # 查询用户信息（如果卡存在）
+            logger.info(f"[DB] 查询卡片用户信息: SELECT user, department FROM kbk_ic_manager WHERE card = {card}")
             cursor.execute('SELECT user, department FROM kbk_ic_manager WHERE card = ?', (card,))
             result = cursor.fetchone()
-            
             if result:
                 user, department = result
+                logger.info(f"[DB] 插入失败记录: user={user}, department={department}, failure_type=3")
                 cursor.execute(
                     'INSERT INTO kbk_ic_failure_records (user, department, failure_type, transaction_date) VALUES (?, ?, ?, ?)',
                     (user, department, 3, get_local_timestamp())  # 时间段错误
                 )
             else:
+                logger.info(f"[DB] 插入失败记录: 卡不存在, failure_type=3")
                 cursor.execute(
                     'INSERT INTO kbk_ic_failure_records (failure_type, transaction_date) VALUES (?, ?)',
                     (3, get_local_timestamp())  # 时间段错误，卡不存在
                 )
-            
             conn.commit()
+            logger.info("[DB] 已提交失败记录（时间段错误）")
             logger.warning(f"Card swiped outside allowed time periods: {card}")
-            
             # 构造失败响应
             display_text = GetChineseCode("{错误}不在允许的用餐时间")
             return f"{response_base},{display_text},10,0,,0,0"
-        
         # 连接数据库
+        logger.info("[DB] 连接数据库: ic_manager.db")
         conn = sqlite3.connect('ic_manager.db')
         # 设置超时
         conn.execute("PRAGMA busy_timeout = 5000")  # 5秒超时
@@ -188,7 +202,7 @@ def process_card(card, jihao, info, dn=None):
         
         # 开始事务
         conn.execute('BEGIN IMMEDIATE TRANSACTION')
-        
+        logger.info(f"[DB] 查询卡片信息: SELECT * FROM kbk_ic_manager WHERE card = {card}")
         # 查询卡片信息
         cursor.execute('SELECT * FROM kbk_ic_manager WHERE card = ?', (card,))
         card_info = cursor.fetchone()
@@ -196,12 +210,14 @@ def process_card(card, jihao, info, dn=None):
         
         # 如果卡号不存在
         if not card_info:
+            logger.info(f"[DB] 卡号不存在，插入失败记录: failure_type=2")
             # 记录失败信息
             cursor.execute(
                 'INSERT INTO kbk_ic_failure_records (failure_type, transaction_date) VALUES (?, ?)',
                 (2, get_local_timestamp())  # 卡号不存在
             )
             conn.commit()
+            logger.info("[DB] 已提交失败记录（卡号不存在）")
             logger.warning(f"Card not found: {card}")
             
             # 构造失败响应
@@ -215,12 +231,14 @@ def process_card(card, jihao, info, dn=None):
         
         # 如果卡片未激活
         if status != 1:
+            logger.info(f"[DB] 卡片未激活，插入失败记录: user={user}, department={department}, failure_type=1")
             # 记录失败信息
             cursor.execute(
                 'INSERT INTO kbk_ic_failure_records (user, department, failure_type, transaction_date) VALUES (?, ?, ?, ?)',
                 (user, department, 1, get_local_timestamp())  # 未激活
             )
             conn.commit()
+            logger.info("[DB] 已提交失败记录（卡片未激活）")
             logger.warning(f"Card inactive: {card}, User: {user}")
             
             # 构造失败响应
@@ -228,6 +246,7 @@ def process_card(card, jihao, info, dn=None):
             return f"{response_base},{display_text},10,0,,0,0"
         
         # 卡片有效，更新状态
+        logger.info(f"[DB] 更新卡片状态: card={card}, status=0")
         cursor.execute(
             'UPDATE kbk_ic_manager SET status = 0, last_updated = ? WHERE card = ?',
             (get_local_timestamp(), card)
@@ -243,6 +262,7 @@ def process_card(card, jihao, info, dn=None):
             count_table = "kbk_ic_nm_count"
         
         if count_table:
+            logger.info(f"[DB] 插入计数表: {count_table}, user={user}, department={department}")
             cursor.execute(
                 f'INSERT INTO {count_table} (user, department, transaction_date) VALUES (?, ?, ?)',
                 (user, department, get_local_timestamp())
@@ -250,6 +270,7 @@ def process_card(card, jihao, info, dn=None):
         
         # 提交事务
         conn.commit()
+        logger.info("[DB] 刷卡业务处理成功并已提交更改")
         
         logger.info(f"Card processed successfully: {card}, User: {user}, Jihao: {jihao}")
         
@@ -260,6 +281,7 @@ def process_card(card, jihao, info, dn=None):
         return f"{response_base},{display_text},10,2,{voice_text},0,0"
         
     except sqlite3.Error as e:
+        logger.error(f"[DB] 数据库异常: {e}")
         # 发生错误时回滚事务
         if conn:
             conn.rollback()
@@ -268,6 +290,7 @@ def process_card(card, jihao, info, dn=None):
         return f"{response_base},{display_text},10,0,,0,0"
         
     finally:
+        logger.info("[DB] 关闭数据库连接")
         # 关闭数据库连接
         if conn:
             conn.close()
@@ -375,6 +398,7 @@ def update_card_status(card, new_status):
     """更新卡片状态，带并发控制"""
     # 使用锁保护数据库操作
     with card_lock:
+        logger.info(f"[DB] 更新卡片状态: card={card}, new_status={new_status}")
         conn = sqlite3.connect('ic_manager.db')
         try:
             # 设置超时
@@ -384,56 +408,68 @@ def update_card_status(card, new_status):
             # 使用事务保证原子性
             conn.execute('BEGIN IMMEDIATE TRANSACTION')  # IMMEDIATE提供写锁
             cursor = conn.cursor()
+            logger.info(f"[DB] 执行SQL: UPDATE kbk_ic_manager SET status = {new_status}, last_updated = 当前时间 WHERE card = {card}")
             cursor.execute(
                 'UPDATE kbk_ic_manager SET status = ?, last_updated = ? WHERE card = ?',
                 (new_status, get_local_timestamp(), card)
             )
             conn.commit()
+            logger.info("[DB] 卡片状态更新并已提交更改")
             return True
         except sqlite3.Error as e:
+            logger.error(f"[DB] 数据库异常: {e}")
             conn.rollback()
             logger.error(f"Database error: {e}")
             return False
         finally:
+            logger.info("[DB] 关闭数据库连接")
             conn.close()
 
 
 def main():
     """主函数，启动服务器"""
+    logger.info("[SYS] 脚本启动，准备初始化数据库")
     # 初始化数据库
-    init_database()
+    try:
+        init_database()
+        logger.info("[SYS] 数据库初始化完成")
+    except Exception as e:
+        logger.error(f"[SYS] 数据库初始化失败: {e}")
+        return
     
-    # 创建TCP服务器
+    logger.info("[SYS] 创建TCP服务器套接字")
     tcp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcp_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     
     try:
+        logger.info("[SYS] 绑定端口99，准备监听")
         # 绑定端口并监听
         tcp_server_socket.bind(("", 99))  # 使用99端口，与读卡器默认端口一致
         tcp_server_socket.listen(128)
-        logger.info("Server started, listening on port 99")
+        logger.info("[SYS] 服务器启动成功，监听端口99，等待连接")
         
         # 主循环
         while True:
             try:
+                logger.info("[SYS] 等待新连接...")
                 # 接受新连接
                 new_socket, client_addr = tcp_server_socket.accept()
-                logger.debug(f"New connection from {client_addr}")
+                logger.info(f"[SYS] 新连接来自 {client_addr}")
                 
                 # 创建新线程处理连接
                 t = threading.Thread(target=service_client, args=(new_socket,))
                 t.start()
             except Exception as e:
-                logger.error(f"Error accepting connection: {e}")
+                logger.error(f"[SYS] 接收连接异常: {e}")
     
     except KeyboardInterrupt:
-        logger.info("Server stopping due to keyboard interrupt")
+        logger.info("[SYS] 检测到键盘中断，服务器即将停止")
     except Exception as e:
-        logger.error(f"Server error: {e}")
+        logger.error(f"[SYS] 服务器启动或运行异常: {e}")
     finally:
         # 关闭服务器套接字
         tcp_server_socket.close()
-        logger.info("Server stopped")
+        logger.info("[SYS] 服务器已关闭")
 
 
 if __name__ == '__main__':
