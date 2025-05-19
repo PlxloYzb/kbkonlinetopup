@@ -58,3 +58,5 @@
 2025-05-19 09:30:54.f - INFO - Database initialized successfully
 2025-05-19 09:30:54.f - INFO - Server started, listening on port 99
 2025-05-19 09:31:04.f - INFO - Card processed successfully: 6506BE24, User: Bruce, Jihao: 1
+2025-05-19 09:50:48.f - INFO - Card processed successfully: 6506BE24, User: Bruce, Jihao: 1
+2025-05-19 09:51:12.f - WARNING - Card inactive: 6506BE24, User: Bruce

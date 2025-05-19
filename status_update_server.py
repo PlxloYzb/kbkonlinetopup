@@ -438,6 +438,9 @@ class DutyUpdateService:
         """批量更新用户状态，不存在则插入，插入时带department、card、status字段，更新时也同步更新card、department、status（不处理is_on_duty）"""
         db_type = self.db_config.get("type", "sqlite").lower()
         total_updated = 0
+        # 获取本地当前时间字符串
+        from datetime import datetime
+        local_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         # 将用户列表分成批次
         batches = [users[i:i+self.batch_size] for i in range(0, len(users), self.batch_size)]
         try:
@@ -451,8 +454,8 @@ class DutyUpdateService:
                         updated_count = 0
                         for u in batch:
                             await cursor.execute(
-                                "UPDATE kbk_ic_manager SET card = ?, department = ?, status = ? WHERE user = ?",
-                                (u["card"], u["department"], u["status"], u["user"])
+                                "UPDATE kbk_ic_manager SET card = ?, department = ?, status = ?, last_updated = ? WHERE user = ?",
+                                (u["card"], u["department"], u["status"], local_now, u["user"])
                             )
                             updated_count += cursor.rowcount
                         total_updated += updated_count
@@ -466,8 +469,8 @@ class DutyUpdateService:
                             for u in to_insert:
                                 # 插入新用户（不处理is_on_duty）
                                 await cursor.execute(
-                                    "INSERT INTO kbk_ic_manager (user, card, department, status) VALUES (?, ?, ?, ?)",
-                                    (u["user"], u["card"], u["department"], u["status"])
+                                    "INSERT INTO kbk_ic_manager (user, card, department, status, last_updated) VALUES (?, ?, ?, ?, ?)",
+                                    (u["user"], u["card"], u["department"], u["status"], local_now)
                                 )
                                 total_updated += 1
                             # 记录日志：标记为update_only但未找到的用户
