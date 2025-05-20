@@ -151,16 +151,10 @@ class DutyUpdateService:
                 self.health_status["latest_excel"] = newest_file
                 # 清除缓存
                 self.get_sheet_data.cache_clear()
-                # 检测到新文件后，立即触发一次数据库状态更新
-                try:
-                    self.trigger_update()
-                except Exception as e:
-                    logger.error(f"自动触发数据库状态更新失败: {str(e)}")
                 
-                # 立即触发一次数据库更新（对所有时间点）
+                # Excel文件已更新，立即触发一次数据库更新（根据当前时间判断时间点）
                 logger.info("Excel文件已更新，立即触发一次数据库更新")
-                for time_point in self.time_points.keys():
-                    self.executor.submit(self.run_async_update, time_point)
+                self.trigger_update()
                 
         except Exception as e:
             ERROR_COUNT.labels(type='file_check').inc()
@@ -191,10 +185,9 @@ class DutyUpdateService:
                 # 清除缓存
                 self.get_sheet_data.cache_clear()
                 
-                # 立即触发一次数据库更新（对所有时间点）
+                # Excel文件已更新，立即触发一次数据库更新（根据当前时间判断时间点）
                 logger.info("Excel文件已更新，立即触发一次数据库更新")
-                for time_point in self.time_points.keys():
-                    self.executor.submit(self.run_async_update, time_point)
+                self.trigger_update()
                 
         except Exception as e:
             ERROR_COUNT.labels(type='file_reload').inc()
@@ -462,17 +455,40 @@ class DutyUpdateService:
                         # 查找未被更新的用户（即数据库不存在的用户）
                         if updated_count < len(user_names):
                             placeholders = ','.join(['?'] * len(user_names))
-                            await cursor.execute(f"SELECT user FROM kbk_ic_manager WHERE user IN ({placeholders})", user_names)
+                            await cursor.execute(f"SELECT user, card FROM kbk_ic_manager WHERE user IN ({placeholders})", user_names)
                             exist_users = set([row[0] for row in await cursor.fetchall()])
-                            # 只对没有update_only标记的用户执行插入操作
-                            to_insert = [u for u in batch if u["user"] not in exist_users and not u.get("update_only", False)]
-                            for u in to_insert:
-                                # 插入新用户（不处理is_on_duty）
-                                await cursor.execute(
-                                    "INSERT INTO kbk_ic_manager (user, card, department, status, last_updated) VALUES (?, ?, ?, ?, ?)",
-                                    (u["user"], u["card"], u["department"], u["status"], local_now)
-                                )
-                                total_updated += 1
+                            # 新增：查找已存在的card，避免唯一性冲突
+                            card_values = [u["card"] for u in batch if u["card"] is not None]
+                            if card_values:
+                                card_placeholders = ','.join(['?'] * len(card_values))
+                                await cursor.execute(f"SELECT card FROM kbk_ic_manager WHERE card IN ({card_placeholders})", card_values)
+                                exist_cards = set([row[0] for row in await cursor.fetchall()])
+                            else:
+                                exist_cards = set()
+                            # 只对没有update_only标记且card未冲突的用户执行插入操作
+                            to_insert_candidates = [u for u in batch if u["user"] not in exist_users and not u.get("update_only", False) and (u["card"] is None or u["card"] not in exist_cards)]
+                            
+                            actually_inserted_cards_in_batch = set() # To track cards inserted in THIS loop iteration for THIS batch
+                            
+                            for u_candidate in to_insert_candidates:
+                                if u_candidate["card"] is not None and u_candidate["card"] in actually_inserted_cards_in_batch:
+                                    logger.warning(f"Skipping insertion of user {u_candidate['user']} with card {u_candidate['card']} as this card was already used for insertion in the current batch.")
+                                    continue
+
+                                try:
+                                    await cursor.execute(
+                                        "INSERT INTO kbk_ic_manager (user, card, department, status, last_updated) VALUES (?, ?, ?, ?, ?)",
+                                        (u_candidate["user"], u_candidate["card"], u_candidate["department"], u_candidate["status"], local_now)
+                                    )
+                                    if u_candidate["card"] is not None:
+                                        actually_inserted_cards_in_batch.add(u_candidate["card"])
+                                    total_updated += 1 
+                                except sqlite3.IntegrityError as integrity_error:
+                                    logger.error(f"IntegrityError during insertion for user {u_candidate['user']} with card {u_candidate['card']}: {integrity_error}. This card might have been inserted by a concurrent operation or pre-check missed it.")
+                                    ERROR_COUNT.labels(type='batch_insert_integrity_error').inc()
+                                except Exception as general_insert_error:
+                                    logger.error(f"Unexpected error during insertion for user {u_candidate['user']} with card {u_candidate['card']}: {general_insert_error}")
+                                    ERROR_COUNT.labels(type='batch_insert_unexpected_error').inc()
                             # 记录日志：标记为update_only但未找到的用户
                             update_only_users = [u["user"] for u in batch if u["user"] not in exist_users and u.get("update_only", False)]
                             if update_only_users:

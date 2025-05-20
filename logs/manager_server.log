@@ -1,0 +1,20 @@
+ * Serving Flask app 'manager_server'
+ * Debug mode: on
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5550
+ * Running on http://192.168.1.100:5550
+[33mPress CTRL+C to quit[0m
+ * Restarting with watchdog (fsevents)
+ * Debugger is active!
+ * Debugger PIN: 121-804-288
+ * Detected change in '/Users/bruceplxl/Dev/ICmanager/status_update_server.py', reloading
+ * Detected change in '/Users/bruceplxl/Dev/ICmanager/status_update_server.py', reloading
+ * Restarting with watchdog (fsevents)
+ * Debugger is active!
+ * Debugger PIN: 121-804-288
+ * Detected change in '/Users/bruceplxl/Dev/ICmanager/status_update_server.py', reloading
+ * Detected change in '/Users/bruceplxl/Dev/ICmanager/status_update_server.py', reloading
+ * Restarting with watchdog (fsevents)
+ * Debugger is active!
+ * Debugger PIN: 121-804-288

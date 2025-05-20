@@ -1,0 +1,15 @@
+[Unit]
+Description=Manager Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/Users/bruceplxl/Dev/ICmanager
+ExecStart=/usr/bin/env python3 /Users/bruceplxl/Dev/ICmanager/manager_server.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/Users/bruceplxl/Dev/ICmanager/logs/manager_server.log
+StandardError=append:/Users/bruceplxl/Dev/ICmanager/logs/manager_server.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+[Unit]
+Description=Status Update Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/Users/bruceplxl/Dev/ICmanager
+ExecStart=/usr/bin/env python3 /Users/bruceplxl/Dev/ICmanager/status_update_server.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/Users/bruceplxl/Dev/ICmanager/logs/status_update_server.log
+StandardError=append:/Users/bruceplxl/Dev/ICmanager/logs/status_update_server.log
+
+[Install]
+WantedBy=multi-user.target

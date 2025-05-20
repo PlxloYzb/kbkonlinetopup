@@ -1,0 +1,15 @@
+[Unit]
+Description=HTTP Reader Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/Users/bruceplxl/Dev/ICmanager
+ExecStart=/usr/bin/env python3 /Users/bruceplxl/Dev/ICmanager/http_reader.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/Users/bruceplxl/Dev/ICmanager/logs/http_reader.log
+StandardError=append:/Users/bruceplxl/Dev/ICmanager/logs/http_reader.log
+
+[Install]
+WantedBy=multi-user.target

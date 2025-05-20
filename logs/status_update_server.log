@@ -1,0 +1,41 @@
+2025-05-20 09:33:53,438 - __main__ - INFO - 监控服务已启动在端口 5551
+2025-05-20 09:33:53,439 - __main__ - INFO - 文件监控已启动，监控文件夹: ./excel
+2025-05-20 09:33:53,452 - __main__ - INFO - 数据库连接池初始化成功
+2025-05-20 09:33:53,452 - __main__ - INFO - 服务已启动
+2025-05-20 09:33:53,453 - __main__ - INFO - 发现新的或已修改的排班文件: 2025-05-20.xlsx
+2025-05-20 09:33:53,453 - __main__ - INFO - Excel文件已更新，立即触发一次数据库更新
+2025-05-20 09:33:53,453 - __main__ - INFO - 触发时间点 c 的更新任务
+2025-05-20 09:33:53,532 - __main__ - INFO - 读取并缓存sheet: 选矿
+2025-05-20 09:33:53,543 - __main__ - INFO - 读取并缓存sheet: 洗矿
+2025-05-20 09:33:53,551 - __main__ - INFO - 读取并缓存sheet: 采矿
+2025-05-20 09:33:53,559 - __main__ - INFO - 读取并缓存sheet: 综合办
+2025-05-20 09:33:53,583 - __main__ - INFO - 跳过插入update_only标记的用户: sec1, sec2, sec4, sec5
+2025-05-20 09:33:53,583 - __main__ - INFO - 跳过插入update_only标记的用户: ops1, ops2, ops4, ops5, ops7
+2025-05-20 09:33:53,584 - __main__ - INFO - 部门 采矿 在时间点 c 更新了 1 条记录
+2025-05-20 09:33:53,584 - __main__ - ERROR - 批量更新用户时出错: UNIQUE constraint failed: kbk_ic_manager.card
+2025-05-20 09:33:53,584 - __main__ - ERROR - 处理部门 综合办 时出错: UNIQUE constraint failed: kbk_ic_manager.card
+2025-05-20 09:33:53,584 - __main__ - INFO - 部门 洗矿 在时间点 c 更新了 2 条记录
+2025-05-20 09:33:53,584 - __main__ - INFO - 跳过插入update_only标记的用户: tech1, tech2, tech4, tech5, tech7, tech8, tech10
+2025-05-20 09:33:53,584 - __main__ - INFO - 部门 选矿 在时间点 c 更新了 3 条记录
+2025-05-20 09:33:53,584 - __main__ - ERROR - 处理部门时出错: UNIQUE constraint failed: kbk_ic_manager.card
+2025-05-20 09:33:53,584 - __main__ - INFO - 时间点 c 的更新完成，共更新 6 条记录，耗时 0.13 秒
+2025-05-20 09:33:55,460 - __main__ - INFO - HTTP服务器已启动在端口 5552
+2025-05-20 09:36:06,162 - __main__ - INFO - 检测到文件修改: /Users/bruceplxl/Dev/ICmanager/excel/2025-05-20.xlsx
+2025-05-20 09:36:06,163 - __main__ - INFO - 当前使用的文件已修改，重新加载文件: 2025-05-20.xlsx
+2025-05-20 09:36:06,164 - __main__ - INFO - 文件内容已变更，更新缓存: 2025-05-20.xlsx
+2025-05-20 09:36:06,165 - __main__ - INFO - Excel文件已更新，立即触发一次数据库更新
+2025-05-20 09:36:06,166 - __main__ - INFO - 触发时间点 c 的更新任务
+2025-05-20 09:36:06,178 - __main__ - INFO - 读取并缓存sheet: 选矿
+2025-05-20 09:36:06,192 - __main__ - INFO - 读取并缓存sheet: 洗矿
+2025-05-20 09:36:06,200 - __main__ - INFO - 读取并缓存sheet: 采矿
+2025-05-20 09:36:06,209 - __main__ - INFO - 读取并缓存sheet: 综合办
+2025-05-20 09:36:06,222 - __main__ - INFO - 跳过插入update_only标记的用户: sec1, sec2, sec4, sec5
+2025-05-20 09:36:06,222 - __main__ - INFO - 跳过插入update_only标记的用户: ops1, ops2, ops4, ops5, ops7
+2025-05-20 09:36:06,223 - __main__ - INFO - 部门 采矿 在时间点 c 更新了 1 条记录
+2025-05-20 09:36:06,223 - __main__ - ERROR - 批量更新用户时出错: UNIQUE constraint failed: kbk_ic_manager.card
+2025-05-20 09:36:06,223 - __main__ - ERROR - 处理部门 综合办 时出错: UNIQUE constraint failed: kbk_ic_manager.card
+2025-05-20 09:36:06,223 - __main__ - INFO - 部门 洗矿 在时间点 c 更新了 2 条记录
+2025-05-20 09:36:06,223 - __main__ - INFO - 跳过插入update_only标记的用户: tech1, tech2, tech4, tech5, tech7, tech8, tech10
+2025-05-20 09:36:06,224 - __main__ - INFO - 部门 选矿 在时间点 c 更新了 3 条记录
+2025-05-20 09:36:06,224 - __main__ - ERROR - 处理部门时出错: UNIQUE constraint failed: kbk_ic_manager.card
+2025-05-20 09:36:06,224 - __main__ - INFO - 时间点 c 的更新完成，共更新 6 条记录，耗时 0.06 秒
