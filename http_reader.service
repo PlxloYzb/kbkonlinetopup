@@ -1,15 +1,16 @@
 [Unit]
-Description=HTTP Reader Server
+Description=HTTP读取器
 After=network.target
 
 [Service]
 Type=simple
+User=root
 WorkingDirectory=/Users/bruceplxl/Dev/ICmanager
-ExecStart=/usr/bin/env python3 /Users/bruceplxl/Dev/ICmanager/http_reader.py
+ExecStart=/Users/bruceplxl/miniconda3/envs/kbkonlinetopup/bin/python http_reader.py
 Restart=always
-RestartSec=5
+RestartSec=10
 StandardOutput=append:/Users/bruceplxl/Dev/ICmanager/logs/http_reader.log
 StandardError=append:/Users/bruceplxl/Dev/ICmanager/logs/http_reader.log
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target 

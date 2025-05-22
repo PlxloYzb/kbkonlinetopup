@@ -1,15 +1,16 @@
 [Unit]
-Description=Manager Server
+Description=管理服务器
 After=network.target
 
 [Service]
 Type=simple
+User=root
 WorkingDirectory=/Users/bruceplxl/Dev/ICmanager
-ExecStart=/usr/bin/env python3 /Users/bruceplxl/Dev/ICmanager/manager_server.py
+ExecStart=/Users/bruceplxl/miniconda3/envs/kbkonlinetopup/bin/python manager_server.py
 Restart=always
-RestartSec=5
+RestartSec=10
 StandardOutput=append:/Users/bruceplxl/Dev/ICmanager/logs/manager_server.log
 StandardError=append:/Users/bruceplxl/Dev/ICmanager/logs/manager_server.log
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target 

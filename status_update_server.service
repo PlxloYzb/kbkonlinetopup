@@ -1,15 +1,16 @@
 [Unit]
-Description=Status Update Server
+Description=状态更新服务
 After=network.target
 
 [Service]
 Type=simple
+User=root
 WorkingDirectory=/Users/bruceplxl/Dev/ICmanager
-ExecStart=/usr/bin/env python3 /Users/bruceplxl/Dev/ICmanager/status_update_server.py
+ExecStart=/Users/bruceplxl/miniconda3/envs/kbkonlinetopup/bin/python status_update_server.py
 Restart=always
-RestartSec=5
-StandardOutput=append:/Users/bruceplxl/Dev/ICmanager/logs/status_update_server.log
-StandardError=append:/Users/bruceplxl/Dev/ICmanager/logs/status_update_server.log
+RestartSec=10
+StandardOutput=append:/Users/bruceplxl/Dev/ICmanager/logs/status_update.log
+StandardError=append:/Users/bruceplxl/Dev/ICmanager/logs/status_update.log
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target 
