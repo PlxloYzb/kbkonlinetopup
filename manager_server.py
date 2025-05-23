@@ -197,12 +197,12 @@ def get_counts():
     result = []
 
     # 定义时段
-    morning_start = time_obj(3, 25)
-    morning_end = time_obj(5, 40)
-    noon_start = time_obj(9, 25)
-    noon_end = time_obj(10, 40)
-    evening_start = time_obj(14, 55)
-    evening_end = time_obj(17, 40)
+    morning_start = time_obj(5, 25)
+    morning_end = time_obj(7, 40)
+    noon_start = time_obj(11, 25)
+    noon_end = time_obj(12, 40)
+    evening_start = time_obj(16, 55)
+    evening_end = time_obj(19, 40)
 
     for table in table_names:
         sql = f"SELECT transaction_date FROM {table} WHERE 1=1"

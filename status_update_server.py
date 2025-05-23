@@ -827,9 +827,9 @@ if __name__ == "__main__":
     db_config = sqlite_config  # 或 mysql_config 或 postgresql_config
     
     time_points = {
-        "a": "03:25",
-        "b": "09:25", 
-        "c": "14:55"
+        "a": "05:25",
+        "b": "11:25", 
+        "c": "16:55"
     }
     
     # 创建并启动HTTP服务器来提供健康状态API
