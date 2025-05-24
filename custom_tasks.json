@@ -1,1 +1,53 @@
-[]
+[
+  {
+    "id": "58c3d8aa-71c6-4f7d-a6c9-338fecf7e92c",
+    "name": "test1",
+    "description": "test1",
+    "task_type": "recurring",
+    "status": "active",
+    "target_status": 1,
+    "department_filter": "",
+    "user_filter": "AAA,Bruce,cs3,cs6,ops3,ops6,prod3,sec3,tech1,tech10,tech2,tech3,tech4,tech5,tech6,tech7,tech8,tech9,测试,测试1,测试10,测试11,测试13,测试14,测试15,测试16,测试17,测试18,测试19,测试2,测试3,测试5,测试6,测试7,测试8,测试9",
+    "execute_time": "00:32",
+    "recurring_pattern": "",
+    "created_at": "2025-05-25 00:31:22",
+    "last_executed": null,
+    "next_execution": null,
+    "execution_count": 0,
+    "recurring_details": null
+  },
+  {
+    "id": "936f7a2b-8e15-4055-a1a5-88a4546e026b",
+    "name": "test2",
+    "description": "test2",
+    "task_type": "recurring",
+    "status": "active",
+    "target_status": 1,
+    "department_filter": "",
+    "user_filter": "AAA,Bruce,cs3,cs6,ops3,ops6,prod3,sec3,tech1,tech10,tech2,tech3,tech4,tech5,tech6,tech7,tech8,tech9,测试,测试1,测试10,测试11,测试13,测试14,测试15,测试16,测试17,测试18,测试19,测试2,测试3,测试5,测试6,测试7,测试8,测试9",
+    "execute_time": "00:46",
+    "recurring_pattern": "",
+    "created_at": "2025-05-25 00:45:20",
+    "last_executed": null,
+    "next_execution": null,
+    "execution_count": 0,
+    "recurring_details": null
+  },
+  {
+    "id": "b400d55e-04d4-45cc-92a2-b75c8c1c49c8",
+    "name": "test3",
+    "description": "test3",
+    "task_type": "recurring",
+    "status": "active",
+    "target_status": 1,
+    "department_filter": "",
+    "user_filter": "AAA,Bruce,cs3,cs6,ops3,ops6,prod3,sec3,tech1,tech10,tech2,tech3,tech4,tech5,tech6,tech7,tech8,tech9,测试,测试1,测试10,测试11,测试13,测试14,测试15,测试16,测试17,测试18,测试19,测试2,测试3,测试5,测试6,测试7,测试8,测试9",
+    "execute_time": "00:47",
+    "recurring_pattern": "",
+    "created_at": "2025-05-25 00:46:31",
+    "last_executed": "2025-05-25 00:47:00",
+    "next_execution": "2025-05-26 00:47",
+    "execution_count": 1,
+    "recurring_details": null
+  }
+]
