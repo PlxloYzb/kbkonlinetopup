@@ -40,11 +40,12 @@ class CustomTask:
     department_filter: str  # 部门筛选条件
     user_filter: str  # 用户筛选条件
     execute_time: str  # 执行时间
-    recurring_pattern: str  # 重复模式（daily, weekly, monthly）
+    recurring_pattern: str  # 重复模式（daily, weekly, monthly等）
     created_at: str
     last_executed: str = None
     next_execution: str = None
     execution_count: int = 0
+    recurring_details: str = None  # 存储重复任务的额外详情
 
 class TaskScheduler:
     def __init__(self):
@@ -59,6 +60,9 @@ class TaskScheduler:
             with open(TASKS_FILE, 'r', encoding='utf-8') as f:
                 tasks_data = json.load(f)
                 for task_data in tasks_data:
+                    # 为兼容性添加默认的recurring_details字段
+                    if 'recurring_details' not in task_data:
+                        task_data['recurring_details'] = None
                     task = CustomTask(**task_data)
                     task.task_type = TaskType(task.task_type)
                     task.status = TaskStatus(task.status)
@@ -157,6 +161,44 @@ class TaskScheduler:
                     schedule.every(30).days.at(time_str).do(
                         self._execute_task, task
                     ).tag(task.id)
+                elif task.recurring_pattern == 'monday':
+                    schedule.every().monday.at(time_str).do(
+                        self._execute_task, task
+                    ).tag(task.id)
+                elif task.recurring_pattern == 'tuesday':
+                    schedule.every().tuesday.at(time_str).do(
+                        self._execute_task, task
+                    ).tag(task.id)
+                elif task.recurring_pattern == 'wednesday':
+                    schedule.every().wednesday.at(time_str).do(
+                        self._execute_task, task
+                    ).tag(task.id)
+                elif task.recurring_pattern == 'thursday':
+                    schedule.every().thursday.at(time_str).do(
+                        self._execute_task, task
+                    ).tag(task.id)
+                elif task.recurring_pattern == 'friday':
+                    schedule.every().friday.at(time_str).do(
+                        self._execute_task, task
+                    ).tag(task.id)
+                elif task.recurring_pattern == 'saturday':
+                    schedule.every().saturday.at(time_str).do(
+                        self._execute_task, task
+                    ).tag(task.id)
+                elif task.recurring_pattern == 'sunday':
+                    schedule.every().sunday.at(time_str).do(
+                        self._execute_task, task
+                    ).tag(task.id)
+                elif task.recurring_pattern == 'monthly_date':
+                    # 每月特定日期（简化处理，每30天执行一次）
+                    schedule.every(30).days.at(time_str).do(
+                        self._execute_task, task
+                    ).tag(task.id)
+                elif task.recurring_pattern == 'selected_dates':
+                    # 选定日期（简化处理，每天检查是否应该执行）
+                    schedule.every().day.at(time_str).do(
+                        self._execute_task, task
+                    ).tag(task.id)
         except Exception as e:
             logger.error(f"调度任务失败 {task.name}: {e}")
     
@@ -174,8 +216,15 @@ class TaskScheduler:
                 params.append(f"%{task.department_filter}%")
             
             if task.user_filter:
-                conditions.append("user LIKE ?")
-                params.append(f"%{task.user_filter}%")
+                # 处理用户筛选：如果包含逗号，说明是选中的用户列表
+                if ',' in task.user_filter:
+                    users = [user.strip() for user in task.user_filter.split(',')]
+                    placeholders = ','.join(['?' for _ in users])
+                    conditions.append(f"user IN ({placeholders})")
+                    params.extend(users)
+                else:
+                    conditions.append("user LIKE ?")
+                    params.append(f"%{task.user_filter}%")
             
             where_clause = " AND ".join(conditions) if conditions else "1=1"
             
@@ -497,31 +546,157 @@ def show_create_task():
                 "部门筛选",
                 ["全部"] + departments
             )
+        
+        # 用户选择界面 - 类似批量管理界面
+        st.subheader("用户选择")
+        
+        # 获取用户列表
+        dept_filter = None if department_filter == "全部" else department_filter
+        users = get_users_by_department(dept_filter)
+        
+        if users:
+            # 创建DataFrame
+            df = pd.DataFrame(users, columns=['用户', '卡号', '当前状态'])
+            df['状态显示'] = df['当前状态'].map({0: '非活跃', 1: '活跃'})
             
-            user_filter = st.text_input("用户筛选", placeholder="用户名关键词（可选）")
+            # 全选/取消全选
+            col1, col2, col3 = st.columns([1, 1, 4])
+            
+            with col1:
+                select_all = st.form_submit_button("全选")
+            
+            with col2:
+                deselect_all = st.form_submit_button("取消全选")
+            
+            # 初始化选中用户列表
+            if 'task_selected_users' not in st.session_state:
+                st.session_state.task_selected_users = []
+            
+            # 处理全选/取消全选
+            if select_all:
+                st.session_state.task_selected_users = df['用户'].tolist()
+            elif deselect_all:
+                st.session_state.task_selected_users = []
+            
+            # 用户选择
+            selected_users = st.multiselect(
+                "选择要应用任务的用户",
+                df['用户'].tolist(),
+                default=st.session_state.task_selected_users,
+                key="task_user_multiselect"
+            )
+            
+            st.session_state.task_selected_users = selected_users
+            
+            if selected_users:
+                st.info(f"已选择 {len(selected_users)} 个用户")
+        else:
+            st.warning("没有找到用户数据")
+            selected_users = []
         
         # 时间设置
         st.subheader("执行时间设置")
         
+        # 验证时间格式的函数
+        def validate_time_format(time_str):
+            try:
+                # 验证格式：HH:MM
+                if len(time_str) != 5 or time_str[2] != ':':
+                    return False
+                hour, minute = time_str.split(':')
+                hour = int(hour)
+                minute = int(minute)
+                return 0 <= hour <= 23 and 0 <= minute <= 59
+            except:
+                return False
+        
         if task_type == TaskType.ONE_TIME:
             execute_date = st.date_input("执行日期")
-            execute_time = st.time_input("执行时间")
-            execute_datetime = f"{execute_date} {execute_time}"
+            execute_time_str = st.text_input(
+                "执行时间", 
+                placeholder="格式：HH:MM (例如：10:17)",
+                help="请输入24小时制时间，格式为 HH:MM"
+            )
+            
+            # 验证时间格式
+            time_valid = True
+            if execute_time_str and not validate_time_format(execute_time_str):
+                st.error("时间格式不正确，请使用 HH:MM 格式（例如：10:17）")
+                time_valid = False
+            
+            execute_datetime = f"{execute_date} {execute_time_str}" if execute_time_str else ""
             recurring_pattern = None
+            recurring_details = None
         else:
-            execute_time = st.time_input("执行时间")
+            execute_time_str = st.text_input(
+                "执行时间", 
+                placeholder="格式：HH:MM (例如：10:17)",
+                help="请输入24小时制时间，格式为 HH:MM"
+            )
+            
+            # 验证时间格式
+            time_valid = True
+            if execute_time_str and not validate_time_format(execute_time_str):
+                st.error("时间格式不正确，请使用 HH:MM 格式（例如：10:17）")
+                time_valid = False
+            
+            # 扩展的重复模式选择
             recurring_pattern = st.selectbox(
                 "重复模式",
-                ["daily", "weekly", "monthly"],
-                format_func=lambda x: {"daily": "每日", "weekly": "每周", "monthly": "每月"}[x]
+                [
+                    "daily", "weekly", "monthly",
+                    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+                    "monthly_date", "selected_dates"
+                ],
+                format_func=lambda x: {
+                    "daily": "每日", "weekly": "每周", "monthly": "每月",
+                    "monday": "每周一", "tuesday": "每周二", "wednesday": "每周三", 
+                    "thursday": "每周四", "friday": "每周五", "saturday": "每周六", "sunday": "每周日",
+                    "monthly_date": "每月特定日期", "selected_dates": "选定日期"
+                }[x]
             )
-            execute_datetime = str(execute_time)
+            
+            # 根据重复模式显示额外选项
+            recurring_details = None
+            if recurring_pattern == "monthly_date":
+                recurring_details = st.selectbox(
+                    "选择月内日期",
+                    list(range(1, 32)),
+                    format_func=lambda x: f"每月{x}日"
+                )
+            elif recurring_pattern == "selected_dates":
+                recurring_details = st.multiselect(
+                    "选择具体日期",
+                    [
+                        "2025-01-01", "2025-01-15", "2025-02-01", "2025-02-15",
+                        "2025-03-01", "2025-03-15", "2025-04-01", "2025-04-15",
+                        "2025-05-01", "2025-05-15", "2025-06-01", "2025-06-15",
+                        "2025-07-01", "2025-07-15", "2025-08-01", "2025-08-15",
+                        "2025-09-01", "2025-09-15", "2025-10-01", "2025-10-15",
+                        "2025-11-01", "2025-11-15", "2025-12-01", "2025-12-15"
+                    ]
+                )
+                # 也可以添加自定义日期输入
+                custom_date = st.date_input("添加自定义日期", value=None)
+                if custom_date:
+                    if recurring_details is None:
+                        recurring_details = []
+                    if str(custom_date) not in recurring_details:
+                        recurring_details.append(str(custom_date))
+            
+            execute_datetime = execute_time_str
         
         submitted = st.form_submit_button("创建任务", type="primary")
         
         if submitted:
             if not task_name:
                 st.error("请输入任务名称")
+            elif not execute_time_str:
+                st.error("请输入执行时间")
+            elif not time_valid:
+                st.error("请输入正确的时间格式")
+            elif not selected_users and department_filter == "全部":
+                st.error("请选择要应用任务的用户或指定部门")
             else:
                 # 创建任务
                 task = CustomTask(
@@ -532,10 +707,11 @@ def show_create_task():
                     status=TaskStatus.ACTIVE,
                     target_status=target_status,
                     department_filter=department_filter if department_filter != "全部" else "",
-                    user_filter=user_filter,
+                    user_filter=','.join(selected_users) if selected_users else "",  # 存储选中的用户列表
                     execute_time=execute_datetime,
                     recurring_pattern=recurring_pattern,
-                    created_at=datetime.now().isoformat()
+                    created_at=datetime.now().isoformat(),
+                    recurring_details=json.dumps(recurring_details) if recurring_details else None
                 )
                 
                 st.session_state.task_scheduler.add_task(task)
@@ -565,8 +741,19 @@ def show_manage_tasks():
                 st.write(f"**用户筛选:** {task.user_filter or '全部'}")
                 st.write(f"**执行时间:** {task.execute_time}")
                 if task.recurring_pattern:
-                    pattern_map = {"daily": "每日", "weekly": "每周", "monthly": "每月"}
+                    pattern_map = {
+                        "daily": "每日", "weekly": "每周", "monthly": "每月",
+                        "monday": "每周一", "tuesday": "每周二", "wednesday": "每周三",
+                        "thursday": "每周四", "friday": "每周五", "saturday": "每周六", "sunday": "每周日",
+                        "monthly_date": "每月特定日期", "selected_dates": "选定日期"
+                    }
                     st.write(f"**重复模式:** {pattern_map.get(task.recurring_pattern, task.recurring_pattern)}")
+                if task.recurring_details:
+                    try:
+                        details = json.loads(task.recurring_details)
+                        st.write(f"**重复详情:** {details}")
+                    except:
+                        pass
                 st.write(f"**创建时间:** {task.created_at}")
                 if task.last_executed:
                     st.write(f"**上次执行:** {task.last_executed}")

@@ -1,0 +1,19 @@
+[
+  {
+    "id": "8f1d856a-2c7b-4dc8-aa0a-bf8f4e7e1c4d",
+    "name": "test",
+    "description": "test",
+    "task_type": "one_time",
+    "status": "active",
+    "target_status": 1,
+    "department_filter": "",
+    "user_filter": "AAA,Bruce,cs3,cs6,ops3,ops6,prod3,sec3,tech1,tech10,tech2,tech3,tech4,tech5,tech6,tech7,tech8,tech9,测试,测试1,测试10,测试11,测试13,测试14,测试15,测试16,测试17,测试18,测试19,测试2,测试3,测试5,测试6,测试7,测试8,测试9",
+    "execute_time": "11:05",
+    "recurring_pattern": "daily",
+    "created_at": "2025-05-24T11:04:24.397513",
+    "last_executed": "2025-05-24T11:04:30.075950",
+    "next_execution": null,
+    "execution_count": 1,
+    "recurring_details": null
+  }
+]
