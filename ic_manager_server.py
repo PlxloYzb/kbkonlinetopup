@@ -12,6 +12,13 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 import uuid
 
+# 必须首先设置页面配置
+st.set_page_config(
+    page_title="IC卡管理系统",
+    page_icon="🏢",
+    layout="wide"
+)
+
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -46,6 +53,10 @@ class CustomTask:
     next_execution: str = None
     execution_count: int = 0
     recurring_details: str = None  # 存储重复任务的额外详情
+
+def get_formatted_timestamp():
+    """获取格式化的时间戳 (YYYY-MM-DD HH:MM:SS)"""
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 class TaskScheduler:
     def __init__(self):
@@ -141,9 +152,20 @@ class TaskScheduler:
                 # 一次性任务
                 execute_datetime = datetime.strptime(task.execute_time, '%Y-%m-%d %H:%M')
                 if execute_datetime > datetime.now():
-                    schedule.every().day.at(execute_datetime.strftime('%H:%M')).do(
-                        self._execute_task, task
-                    ).tag(task.id)
+                    # 修改调度方式，确保一次性任务只在指定日期执行
+                    target_date = execute_datetime.date()
+                    target_time = execute_datetime.strftime('%H:%M')
+                    
+                    # 使用日期检查确保只在目标日期执行
+                    def should_run_task():
+                        current_date = datetime.now().date()
+                        return current_date == target_date
+                    
+                    job = schedule.every().day.at(target_time).do(
+                        lambda: self._execute_task(task) if should_run_task() else None
+                    )
+                    job.tag(task.id)
+                    logger.info(f"已调度一次性任务: {task.name} 在 {task.execute_time}")
             else:
                 # 重复任务
                 time_str = task.execute_time.split(' ')[1] if ' ' in task.execute_time else task.execute_time
@@ -190,15 +212,56 @@ class TaskScheduler:
                         self._execute_task, task
                     ).tag(task.id)
                 elif task.recurring_pattern == 'monthly_date':
-                    # 每月特定日期（简化处理，每30天执行一次）
-                    schedule.every(30).days.at(time_str).do(
-                        self._execute_task, task
-                    ).tag(task.id)
+                    # 每月特定日期
+                    try:
+                        # 获取月内日期
+                        if task.recurring_details:
+                            day_of_month = int(json.loads(task.recurring_details))
+                        else:
+                            day_of_month = 1  # 默认每月1日
+                        
+                        # 使用日期检查确保只在目标日期执行
+                        def should_run_monthly():
+                            current_day = datetime.now().day
+                            return current_day == day_of_month
+                        
+                        job = schedule.every().day.at(time_str).do(
+                            lambda: self._execute_task(task) if should_run_monthly() else None
+                        )
+                        job.tag(task.id)
+                    except Exception as e:
+                        logger.error(f"调度monthly_date任务失败 {task.name}: {e}")
+                        # 回退到简单模式
+                        schedule.every(30).days.at(time_str).do(
+                            self._execute_task, task
+                        ).tag(task.id)
+                
                 elif task.recurring_pattern == 'selected_dates':
-                    # 选定日期（简化处理，每天检查是否应该执行）
-                    schedule.every().day.at(time_str).do(
-                        self._execute_task, task
-                    ).tag(task.id)
+                    # 选定日期
+                    try:
+                        selected_dates = []
+                        if task.recurring_details:
+                            dates_data = json.loads(task.recurring_details)
+                            if isinstance(dates_data, list):
+                                selected_dates = [datetime.strptime(d, '%Y-%m-%d').date() for d in dates_data]
+                        
+                        # 使用日期检查确保只在选定日期执行
+                        def should_run_selected():
+                            current_date = datetime.now().date()
+                            return current_date in selected_dates
+                        
+                        job = schedule.every().day.at(time_str).do(
+                            lambda: self._execute_task(task) if should_run_selected() else None
+                        )
+                        job.tag(task.id)
+                    except Exception as e:
+                        logger.error(f"调度selected_dates任务失败 {task.name}: {e}")
+                        # 回退到简单模式
+                        schedule.every().day.at(time_str).do(
+                            self._execute_task, task
+                        ).tag(task.id)
+                
+                logger.info(f"已调度重复任务: {task.name} 模式: {task.recurring_pattern} 时间: {time_str}")
         except Exception as e:
             logger.error(f"调度任务失败 {task.name}: {e}")
     
@@ -238,7 +301,8 @@ class TaskScheduler:
                 WHERE {where_clause}
             """
             
-            update_params = [task.target_status, datetime.now().isoformat()] + params
+            # 使用格式化的时间戳
+            update_params = [task.target_status, get_formatted_timestamp()] + params
             cursor.execute(update_sql, update_params)
             
             affected_rows = cursor.rowcount
@@ -246,12 +310,65 @@ class TaskScheduler:
             conn.close()
             
             # 更新任务状态
-            task.last_executed = datetime.now().isoformat()
+            task.last_executed = get_formatted_timestamp()
             task.execution_count += 1
             
             if task.task_type == TaskType.ONE_TIME:
                 task.status = TaskStatus.COMPLETED
+                task.next_execution = None
                 schedule.clear(task.id)
+            else:
+                # 计算下一次执行时间并更新
+                try:
+                    # 重复任务，根据模式计算下一次执行时间
+                    time_str = task.execute_time.split(' ')[1] if ' ' in task.execute_time else task.execute_time
+                    hour, minute = map(int, time_str.split(':'))
+                    
+                    now = datetime.now()
+                    today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    
+                    if task.recurring_pattern == 'daily':
+                        next_run = today + timedelta(days=1)
+                    elif task.recurring_pattern == 'weekly':
+                        next_run = today + timedelta(days=7)
+                    elif task.recurring_pattern in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
+                        weekday_map = {'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3, 'friday': 4, 'saturday': 5, 'sunday': 6}
+                        target_day = weekday_map.get(task.recurring_pattern, 0)
+                        days_ahead = (target_day - now.weekday()) % 7
+                        if days_ahead == 0:
+                            days_ahead = 7
+                        next_run = today + timedelta(days=days_ahead)
+                    elif task.recurring_pattern == 'monthly_date':
+                        # 计算下一个月的对应日期
+                        if task.recurring_details:
+                            day_of_month = int(json.loads(task.recurring_details))
+                        else:
+                            day_of_month = 1
+                            
+                        current_month = now.month
+                        current_year = now.year
+                        
+                        if current_month == 12:
+                            next_month = 1
+                            next_year = current_year + 1
+                        else:
+                            next_month = current_month + 1
+                            next_year = current_year
+                        
+                        # 处理月份天数问题
+                        import calendar
+                        last_day = calendar.monthrange(next_year, next_month)[1]
+                        actual_day = min(day_of_month, last_day)
+                        
+                        next_run = datetime(next_year, next_month, actual_day, hour, minute)
+                    else:
+                        # 对于其他模式，默认设置为明天同一时间
+                        next_run = today + timedelta(days=1)
+                    
+                    task.next_execution = next_run.strftime('%Y-%m-%d %H:%M')
+                except Exception as e:
+                    logger.error(f"计算下一次执行时间失败 {task.name}: {e}")
+                    task.next_execution = None
             
             self.save_tasks()
             
@@ -266,13 +383,21 @@ class TaskScheduler:
         """启动调度器"""
         if not self.running:
             self.running = True
+            
+            # 首先清除所有现有的调度任务
+            schedule.clear()
+            logger.info("已清除所有现有调度任务")
+            
             # 重新调度所有活跃任务
+            active_tasks = 0
             for task in self.tasks.values():
                 if task.status == TaskStatus.ACTIVE:
                     self._schedule_task(task)
+                    active_tasks += 1
             
             self.thread = threading.Thread(target=self._run_scheduler, daemon=True)
             self.thread.start()
+            logger.info(f"任务调度器后台线程已启动，已调度 {active_tasks} 个活跃任务")
     
     def stop_scheduler(self):
         """停止调度器"""
@@ -281,7 +406,16 @@ class TaskScheduler:
     
     def _run_scheduler(self):
         """运行调度器"""
+        last_log_time = datetime.now()
+        
         while self.running:
+            pending_jobs = len(schedule.get_jobs())
+            
+            # 每隔一小时记录一次调度器状态
+            if (datetime.now() - last_log_time).total_seconds() > 3600:
+                logger.info(f"调度器正在运行，当前有 {pending_jobs} 个待执行任务")
+                last_log_time = datetime.now()
+                
             schedule.run_pending()
             time.sleep(1)
 
@@ -327,7 +461,8 @@ def update_user_status(users, status):
         WHERE user IN ({placeholders})
     """
     
-    params = [status, datetime.now().isoformat()] + list(users)
+    # 使用格式化的时间戳
+    params = [status, get_formatted_timestamp()] + list(users)
     cursor.execute(sql, params)
     
     affected_rows = cursor.rowcount
@@ -369,18 +504,20 @@ def get_user_statistics():
         'department_stats': dept_stats
     }
 
-# 初始化任务调度器
+# 初始化任务调度器 - 使用缓存确保单例模式
+@st.cache_resource
+def get_task_scheduler():
+    """获取全局任务调度器实例"""
+    scheduler = TaskScheduler()
+    scheduler.start_scheduler()
+    logger.info("任务调度器已启动")
+    return scheduler
+
+# 获取全局任务调度器实例
 if 'task_scheduler' not in st.session_state:
-    st.session_state.task_scheduler = TaskScheduler()
-    st.session_state.task_scheduler.start_scheduler()
+    st.session_state.task_scheduler = get_task_scheduler()
 
 def main():
-    st.set_page_config(
-        page_title="IC卡管理系统",
-        page_icon="🏢",
-        layout="wide"
-    )
-    
     st.title("🏢 IC卡管理系统")
     
     # 侧边栏导航
@@ -522,17 +659,27 @@ def show_create_task():
     """显示创建任务界面"""
     st.subheader("创建新任务")
     
+    # 初始化session state用于存储任务类型
+    if 'task_type' not in st.session_state:
+        st.session_state.task_type = TaskType.ONE_TIME
+    
     with st.form("create_task_form"):
         col1, col2 = st.columns(2)
         
         with col1:
             task_name = st.text_input("任务名称", placeholder="例如：夜间禁用所有卡片")
             task_description = st.text_area("任务描述", placeholder="详细描述任务的目的和作用")
+            
+            # 将任务类型选择移到表单内
             task_type = st.selectbox(
                 "任务类型",
                 [(TaskType.ONE_TIME, "一次性任务"), (TaskType.RECURRING, "重复任务")],
-                format_func=lambda x: x[1]
+                format_func=lambda x: x[1],
+                index=0 if st.session_state.task_type == TaskType.ONE_TIME else 1,
+                key="task_type_select"
             )[0]
+            # 更新session state中的任务类型
+            st.session_state.task_type = task_type
         
         with col2:
             target_status = st.selectbox(
@@ -610,7 +757,8 @@ def show_create_task():
             except:
                 return False
         
-        if task_type == TaskType.ONE_TIME:
+        # 根据session state中的任务类型显示不同的UI
+        if st.session_state.task_type == TaskType.ONE_TIME:
             execute_date = st.date_input("执行日期")
             execute_time_str = st.text_input(
                 "执行时间", 
@@ -703,19 +851,22 @@ def show_create_task():
                     id=str(uuid.uuid4()),
                     name=task_name,
                     description=task_description,
-                    task_type=task_type,
+                    task_type=st.session_state.task_type,  # 使用session state中的任务类型
                     status=TaskStatus.ACTIVE,
                     target_status=target_status,
                     department_filter=department_filter if department_filter != "全部" else "",
                     user_filter=','.join(selected_users) if selected_users else "",  # 存储选中的用户列表
                     execute_time=execute_datetime,
-                    recurring_pattern=recurring_pattern,
-                    created_at=datetime.now().isoformat(),
+                    recurring_pattern=recurring_pattern if st.session_state.task_type == TaskType.RECURRING else None,
+                    created_at=get_formatted_timestamp(),
                     recurring_details=json.dumps(recurring_details) if recurring_details else None
                 )
                 
                 st.session_state.task_scheduler.add_task(task)
                 st.success(f"任务 '{task_name}' 创建成功！")
+                # 清理session state
+                if 'task_selected_users' in st.session_state:
+                    del st.session_state.task_selected_users
                 st.rerun()
 
 def show_manage_tasks():
@@ -790,6 +941,25 @@ def show_task_monitoring():
         st.info("暂无任务")
         return
     
+    # 显示调度器状态
+    scheduler = st.session_state.task_scheduler
+    col1, col2 = st.columns(2)
+    with col1:
+        st.info(f"调度器状态: {'运行中' if scheduler.running else '已停止'}")
+    with col2:
+        scheduled_jobs = len(schedule.jobs)
+        st.info(f"当前调度的任务数: {scheduled_jobs}")
+        
+    # 如果调度器没有任务但有活跃任务，显示警告
+    active_tasks = sum(1 for task in tasks.values() if task.status == TaskStatus.ACTIVE)
+    if scheduled_jobs == 0 and active_tasks > 0:
+        st.warning(f"警告：有 {active_tasks} 个活跃任务，但调度器中没有任务。可能需要重启调度器。")
+        if st.button("重启调度器"):
+            scheduler.stop_scheduler()
+            scheduler.start_scheduler()
+            st.success("调度器已重启")
+            st.rerun()
+    
     # 任务状态统计
     status_counts = {}
     for task in tasks.values():
@@ -813,8 +983,109 @@ def show_task_monitoring():
     # 任务详情表格
     st.subheader("任务详情")
     
+    # 计算下一次执行时间
+    def calculate_next_execution(task):
+        if task.status != TaskStatus.ACTIVE:
+            return "任务未激活"
+        
+        try:
+            if task.task_type == TaskType.ONE_TIME:
+                execute_datetime = datetime.strptime(task.execute_time, '%Y-%m-%d %H:%M')
+                if execute_datetime > datetime.now():
+                    return execute_datetime.strftime('%Y-%m-%d %H:%M')
+                else:
+                    return "已过期"
+            else:
+                # 重复任务，根据模式计算下一次执行时间
+                time_str = task.execute_time.split(' ')[1] if ' ' in task.execute_time else task.execute_time
+                hour, minute = map(int, time_str.split(':'))
+                
+                now = datetime.now()
+                today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                
+                if task.recurring_pattern == 'daily':
+                    next_run = today if today > now else today + timedelta(days=1)
+                elif task.recurring_pattern == 'weekly':
+                    days_ahead = 7 - now.weekday()
+                    next_run = today + timedelta(days=days_ahead)
+                elif task.recurring_pattern in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']:
+                    weekday_map = {'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3, 'friday': 4, 'saturday': 5, 'sunday': 6}
+                    target_day = weekday_map.get(task.recurring_pattern, 0)
+                    days_ahead = (target_day - now.weekday()) % 7
+                    if days_ahead == 0 and today < now:
+                        days_ahead = 7
+                    next_run = today + timedelta(days=days_ahead)
+                elif task.recurring_pattern == 'monthly_date':
+                    try:
+                        if task.recurring_details:
+                            day_of_month = int(json.loads(task.recurring_details))
+                        else:
+                            day_of_month = 1
+                        
+                        # 计算下一个月的对应日期
+                        current_month = now.month
+                        current_year = now.year
+                        
+                        # 如果当前日期小于目标日期，使用当前月份
+                        if now.day < day_of_month:
+                            next_run = now.replace(day=day_of_month, hour=hour, minute=minute, second=0, microsecond=0)
+                        else:
+                            # 否则使用下个月
+                            if current_month == 12:
+                                next_month = 1
+                                next_year = current_year + 1
+                            else:
+                                next_month = current_month + 1
+                                next_year = current_year
+                            
+                            # 处理月份天数问题
+                            import calendar
+                            last_day = calendar.monthrange(next_year, next_month)[1]
+                            actual_day = min(day_of_month, last_day)
+                            
+                            next_run = datetime(next_year, next_month, actual_day, hour, minute)
+                    except:
+                        return "计算错误"
+                elif task.recurring_pattern == 'selected_dates':
+                    try:
+                        if task.recurring_details:
+                            dates_data = json.loads(task.recurring_details)
+                            if isinstance(dates_data, list) and dates_data:
+                                future_dates = []
+                                for date_str in dates_data:
+                                    date_obj = datetime.strptime(date_str, '%Y-%m-%d').date()
+                                    if date_obj >= now.date():
+                                        future_dates.append(date_obj)
+                                
+                                if future_dates:
+                                    next_date = min(future_dates)
+                                    next_run = datetime.combine(next_date, datetime.strptime(time_str, '%H:%M').time())
+                                else:
+                                    return "无未来日期"
+                            else:
+                                return "无选定日期"
+                        else:
+                            return "无选定日期"
+                    except:
+                        return "计算错误"
+                else:
+                    return "未知模式"
+                
+                return next_run.strftime('%Y-%m-%d %H:%M')
+        except Exception as e:
+            return f"计算错误: {str(e)}"
+    
     task_data = []
     for task in tasks.values():
+        # 使用任务中已保存的下次执行时间，如果没有则计算
+        if task.status == TaskStatus.ACTIVE:
+            if task.next_execution:
+                next_execution = task.next_execution
+            else:
+                next_execution = calculate_next_execution(task)
+        else:
+            next_execution = "未激活"
+        
         task_data.append({
             '任务名称': task.name,
             '状态': task.status.value,
@@ -823,6 +1094,7 @@ def show_task_monitoring():
             '执行时间': task.execute_time,
             '执行次数': task.execution_count,
             '上次执行': task.last_executed or '未执行',
+            '下次执行': next_execution,
             '创建时间': task.created_at
         })
     
@@ -831,8 +1103,16 @@ def show_task_monitoring():
         st.dataframe(df, use_container_width=True)
     
     # 刷新按钮
-    if st.button("刷新数据"):
-        st.rerun()
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("刷新数据"):
+            st.rerun()
+    with col2:
+        if st.button("重新调度所有活跃任务"):
+            scheduler.stop_scheduler()
+            scheduler.start_scheduler()
+            st.success("已重新调度所有活跃任务")
+            st.rerun()
 
 if __name__ == "__main__":
     main()
