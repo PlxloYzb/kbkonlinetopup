@@ -9,3 +9,4 @@ aiohttp
 watchdog
 prometheus-client
 flask-cors
+streamlit>=1.28.0
