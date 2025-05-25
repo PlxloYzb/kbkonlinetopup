@@ -9,8 +9,6 @@ WorkingDirectory=/home/bruceplxl/deploy/kbkonlinetopup
 ExecStart=/bin/bash -c 'source /home/bruceplxl/miniconda3/bin/activate kbkonlinetopup && python status_update_server.py'
 Restart=always
 RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
 SyslogIdentifier=status_update_service
 Environment=PYTHONUNBUFFERED=1
 ProtectSystem=full

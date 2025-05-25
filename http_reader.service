@@ -9,8 +9,6 @@ WorkingDirectory=/home/bruceplxl/deploy/kbkonlinetopup
 ExecStart=/bin/bash -c 'source /home/bruceplxl/miniconda3/bin/activate kbkonlinetopup && python http_reader.py'
 Restart=always
 RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
 SyslogIdentifier=http_reader
 Environment=PYTHONUNBUFFERED=1
 ProtectSystem=full
