@@ -4,13 +4,18 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/Users/bruceplxl/Dev/ICmanager
-ExecStart=/Users/bruceplxl/miniconda3/envs/kbkonlinetopup/bin/python http_reader.py
+User=bruceplxl
+WorkingDirectory=/home/bruceplxl/deploy/kbkonlinetopup
+ExecStart=/bin/bash -c 'source /home/bruceplxl/miniconda3/bin/activate kbkonlinetopup && python http_reader.py'
 Restart=always
 RestartSec=10
-StandardOutput=append:/Users/bruceplxl/Dev/ICmanager/logs/http_reader.log
-StandardError=append:/Users/bruceplxl/Dev/ICmanager/logs/http_reader.log
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=http_reader
+Environment=PYTHONUNBUFFERED=1
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
 
 [Install]
-WantedBy=multi-user.target 
+WantedBy=multi-user.target

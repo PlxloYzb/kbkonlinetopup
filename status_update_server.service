@@ -4,13 +4,19 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/Users/bruceplxl/Dev/ICmanager
-ExecStart=/Users/bruceplxl/miniconda3/envs/kbkonlinetopup/bin/python status_update_server.py
+User=bruceplxl
+WorkingDirectory=/home/bruceplxl/deploy/kbkonlinetopup
+ExecStart=/bin/bash -c 'source /home/bruceplxl/miniconda3/bin/activate kbkonlinetopup && python status_update_server.py'
 Restart=always
 RestartSec=10
-StandardOutput=append:/Users/bruceplxl/Dev/ICmanager/logs/status_update.log
-StandardError=append:/Users/bruceplxl/Dev/ICmanager/logs/status_update.log
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=status_update_service
+Environment=PYTHONUNBUFFERED=1
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+MemoryMax=512M
 
 [Install]
-WantedBy=multi-user.target 
+WantedBy=multi-user.target
