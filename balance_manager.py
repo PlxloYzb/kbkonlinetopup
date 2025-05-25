@@ -67,7 +67,7 @@ MAX_WORKERS = 4
 TIME_POINTS = {
     "a": "05:25",
     "b": "11:25", 
-    "c": "23:40"
+    "c": "16:55"
 }
 
 class ExcelFileHandler(watchdog.events.FileSystemEventHandler):
@@ -115,11 +115,19 @@ class BalanceManager:
         # 确保数据库结构正确
         self.ensure_db_structure()
     
+    def get_local_timestamp(self):
+        """获取本地时区的时间戳字符串（UTC+10）"""
+        # 使用UTC+10的时间
+        utc_plus_10 = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        return utc_plus_10
+    
     def ensure_db_structure(self):
         """确保数据库结构正确，创建kbk_ic_balance表和索引"""
         try:
             logger.info("检查并初始化数据库结构")
             conn = sqlite3.connect(DB_PATH)
+            # 设置数据库连接以使用本地时区
+            conn.execute("PRAGMA timezone='localtime'")
             cursor = conn.cursor()
             
             # 检查kbk_ic_balance表是否存在，不存在则创建
@@ -294,20 +302,22 @@ class BalanceManager:
                         
                         if result:
                             # 更新已存在的记录
+                            local_time = self.get_local_timestamp()
                             cursor.execute(
                                 '''UPDATE kbk_ic_balance 
-                                   SET balance = ?, updated_at = CURRENT_TIMESTAMP 
+                                   SET balance = ?, updated_at = ? 
                                    WHERE user = ? AND department = ?''', 
-                                (balance, user, department)
+                                (balance, local_time, user, department)
                             )
                             total_updated += 1
                         else:
                             # 插入新记录
+                            local_time = self.get_local_timestamp()
                             cursor.execute(
                                 '''INSERT INTO kbk_ic_balance 
                                    (user, department, balance, created_at, updated_at) 
-                                   VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)''', 
-                                (user, department, balance)
+                                   VALUES (?, ?, ?, ?, ?)''', 
+                                (user, department, balance, local_time, local_time)
                             )
                             total_inserted += 1
                 
@@ -321,8 +331,7 @@ class BalanceManager:
                 self.health_status["last_import"] = datetime.now().isoformat()
                 self.health_status["status"] = "healthy"
                 
-                # 导入完成后，立即触发一次状态更新
-                self.trigger_balance_check()
+                # 移除自动触发余额检查，仅在预定时间点执行
                 
             except Exception as e:
                 conn.rollback()
@@ -396,7 +405,7 @@ class BalanceManager:
     def trigger_balance_check(self):
         """触发余额检查，自动判断时间点"""
         time_point = self.get_time_point_by_now()
-        logger.info(f"触发余额检查 (自动时间点: {time_point})")
+        logger.info(f"手动触发余额检查 (自动时间点: {time_point})")
         self.executor.submit(self.process_balance_check, time_point)
     
     def process_balance_check(self, time_point):
@@ -406,6 +415,8 @@ class BalanceManager:
             start_time = time.time()
             
             conn = sqlite3.connect(DB_PATH)
+            # 设置数据库连接以使用本地时区
+            conn.execute("PRAGMA timezone='localtime'")
             cursor = conn.cursor()
             
             try:
@@ -424,13 +435,14 @@ class BalanceManager:
                 total_updated = 0
                 
                 # 2. 更新kbk_ic_manager表中相应用户的status为1
+                local_time = self.get_local_timestamp()
                 for user, department, balance in positive_balance_records:
                     # 更新status为1
                     cursor.execute(
                         '''UPDATE kbk_ic_manager 
-                           SET status = 1, last_updated = CURRENT_TIMESTAMP 
+                           SET status = 1, last_updated = ? 
                            WHERE user = ? AND department = ?''',
-                        (user, department)
+                        (local_time, user, department)
                     )
                     if cursor.rowcount > 0:
                         total_updated += 1
@@ -439,18 +451,35 @@ class BalanceManager:
                 
                 # 3. 原子性递减kbk_ic_balance表中的balance值
                 # 每个时间点递减1
+                local_time = self.get_local_timestamp()
                 cursor.execute(
                     '''UPDATE kbk_ic_balance 
-                       SET balance = balance - 1, updated_at = CURRENT_TIMESTAMP 
-                       WHERE balance > 0'''
+                       SET balance = balance - 1, updated_at = ? 
+                       WHERE balance > 0''',
+                    (local_time,)
                 )
                 decremented_count = cursor.rowcount
+                
+                # 4. 将余额为0的用户状态设置为0
+                local_time = self.get_local_timestamp()
+                cursor.execute(
+                    '''UPDATE kbk_ic_manager 
+                       SET status = 0, last_updated = ? 
+                       WHERE user IN (
+                           SELECT user FROM kbk_ic_balance WHERE balance = 0
+                       ) AND department IN (
+                           SELECT department FROM kbk_ic_balance WHERE balance = 0
+                       )''',
+                    (local_time,)
+                )
+                zero_balance_updated = cursor.rowcount
                 
                 # 提交事务
                 conn.commit()
                 
                 process_time = time.time() - start_time
-                logger.info(f"余额检查完成，用户状态更新: {total_updated}条，余额递减: {decremented_count}条，耗时: {process_time:.2f}秒")
+                logger.info(f"余额检查完成，用户状态更新: {total_updated}条，余额递减: {decremented_count}条，"
+                          f"余额为0状态更新: {zero_balance_updated}条，耗时: {process_time:.2f}秒")
                 
                 # 更新健康状态
                 self.health_status["last_update"] = datetime.now().isoformat()
@@ -487,6 +516,8 @@ class BalanceManager:
             start_time = time.time()
             
             conn = sqlite3.connect(DB_PATH)
+            # 设置数据库连接以使用本地时区
+            conn.execute("PRAGMA timezone='localtime'")
             cursor = conn.cursor()
             
             try:
@@ -505,12 +536,13 @@ class BalanceManager:
                 total_updated = 0
                 
                 # 更新kbk_ic_manager表中相应用户的status为0
+                local_time = self.get_local_timestamp()
                 for user, department in zero_balance_users:
                     cursor.execute(
                         '''UPDATE kbk_ic_manager 
-                           SET status = 0, last_updated = CURRENT_TIMESTAMP 
+                           SET status = 0, last_updated = ? 
                            WHERE user = ? AND department = ?''',
-                        (user, department)
+                        (local_time, user, department)
                     )
                     if cursor.rowcount > 0:
                         total_updated += 1
@@ -622,6 +654,8 @@ class BalanceManagerServer:
                     }), 400
                 
                 conn = sqlite3.connect(DB_PATH)
+                # 设置数据库连接以使用本地时区
+                conn.execute("PRAGMA timezone='localtime'")
                 cursor = conn.cursor()
                 
                 if department:

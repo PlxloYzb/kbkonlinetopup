@@ -118,9 +118,9 @@ class DutyUpdateService:
         if self.unique_excel_folder:
             # a时间点后2分钟的周一早餐任务
             a_time = datetime.strptime(self.time_points["a"], "%H:%M")
-            a_plus_2min = a_time + timedelta(minutes=2)
+            a_plus_2min = a_time + timedelta(minutes=1)
             c_time = datetime.strptime(self.time_points["c"], "%H:%M")
-            c_plus_2min = c_time + timedelta(minutes=2)
+            c_plus_2min = c_time + timedelta(minutes=1)
             
             # 周一早餐任务
             schedule.every().monday.at(a_plus_2min.strftime("%H:%M")).do(
