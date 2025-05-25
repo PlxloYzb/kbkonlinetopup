@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 定义服务名称数组
-SERVICES=("status_update" "manager_server" "http_reader")
+SERVICES=("status_update_server" "manager_server" "http_reader")
 
 # 检查是否以root运行
 check_root() {
