@@ -20,7 +20,7 @@ mkdir -p $WORK_DIR/logs
 echo "创建日志目录完成"
 
 # 替换服务文件中的用户名和工作目录路径
-for SERVICE in status_update_server manager_server http_reader; do
+for SERVICE in status_update_server manager_server http_reader balance_manager; do
   # 替换用户名
   sed -i.bak "s|\${USER}|$CURRENT_USER|g" ${SERVICE}.service
   
@@ -31,7 +31,7 @@ for SERVICE in status_update_server manager_server http_reader; do
 done
 
 # 将服务文件复制到systemd目录
-for SERVICE in status_update_server manager_server http_reader; do
+for SERVICE in status_update_server manager_server http_reader balance_manager; do
   cp ${SERVICE}.service /etc/systemd/system/
   echo "已复制 ${SERVICE}.service 到systemd目录"
 done
@@ -41,7 +41,7 @@ systemctl daemon-reload
 echo "systemd配置已重新加载"
 
 # 启用服务（开机自启）
-for SERVICE in status_update_server manager_server http_reader; do
+for SERVICE in status_update_server manager_server http_reader balance_manager; do
   systemctl enable ${SERVICE}.service
   echo "已启用 ${SERVICE} 服务开机自启"
 done
@@ -50,7 +50,7 @@ echo ""
 echo "是否现在启动所有服务? (y/n)"
 read -r ANSWER
 if [ "$ANSWER" = "y" ] || [ "$ANSWER" = "Y" ]; then
-  for SERVICE in status_update_server manager_server http_reader; do
+  for SERVICE in status_update_server manager_server http_reader balance_manager; do
     systemctl start ${SERVICE}.service
     echo "已启动 ${SERVICE} 服务"
   done
@@ -65,4 +65,4 @@ echo "  重启: sudo systemctl restart [服务名].service"
 echo "  状态: sudo systemctl status [服务名].service"
 echo "  查看日志: sudo journalctl -u [服务名].service"
 echo ""
-echo "例如: sudo systemctl status status_update_server.service" 
+echo "例如: sudo systemctl status balance_manager.service"

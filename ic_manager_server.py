@@ -110,13 +110,61 @@ class TaskScheduler:
     
     def add_task(self, task: CustomTask):
         """添加任务"""
+        # 后端兜底，防止recurring_pattern为空
+        if task.task_type == TaskType.RECURRING and (not task.recurring_pattern or task.recurring_pattern.strip() == ""):
+            task.recurring_pattern = "daily" # 默认为每日
+            logger.warning(f"任务 {task.name} 的 recurring_pattern 为空，已设为 'daily'")
+
         if task.status == TaskStatus.ACTIVE:
             task.next_execution = self._calculate_next_execution(task)
+        
         self.tasks[task.id] = task
         self.save_tasks()
-        self._schedule_task(task)
+        
+        logger.info(f"任务 '{task.name}' ({task.id}) 即将首次调度 (_schedule_task).")
+        self._schedule_task(task) # 首次尝试调度
+        
+        # 检查首次调度后任务是否在 jobs 中
+        job_found_after_first_schedule = False
+        new_task_job_details = "Not found or no next run."
+        for job in schedule.jobs:
+            if job.tags and task.id in job.tags:
+                job_found_after_first_schedule = True
+                try:
+                    next_run_time = job.next_run.strftime('%Y-%m-%d %H:%M:%S') if job.next_run else "N/A"
+                    new_task_job_details = f"Found in schedule.jobs. Next Run: {next_run_time}"
+                except Exception as e:
+                    new_task_job_details = f"Found, but error getting next_run: {e}"
+                break
+        logger.info(f"任务 '{task.name}' ({task.id}) 首次调度后状态: {new_task_job_details}")
+
+        logger.info(f"任务 '{task.name}' ({task.id}) 添加完成，即将调用 ensure_scheduler_running.")
         self.ensure_scheduler_running()
-        logger.info(f"任务 '{task.name}' 已添加并调度")
+        
+        # 在 ensure_scheduler_running (可能已重新调度所有任务) 后再次检查
+        job_found_after_ensure = False
+        final_job_details = "Not found or no next run."
+        current_job_tags = []
+        for job_idx, job in enumerate(schedule.jobs):
+            if job.tags:
+                current_job_tags.append(str(job.tags))
+                if task.id in job.tags:
+                    job_found_after_ensure = True
+                    try:
+                        next_run_time = job.next_run.strftime('%Y-%m-%d %H:%M:%S') if job.next_run else "N/A"
+                        final_job_details = f"Found in schedule.jobs. Next Run: {next_run_time}"
+                    except Exception as e:
+                        final_job_details = f"Found, but error getting next_run: {e}"
+                    break
+        logger.info(f"任务 '{task.name}' ({task.id}) 在 ensure_scheduler_running 调用后状态: {final_job_details}")
+        logger.info(f"当前所有 job tags (after add_task for {task.id}): {', '.join(current_job_tags)}")
+        
+        if not job_found_after_ensure and task.status == TaskStatus.ACTIVE:
+             logger.error(f"CRITICAL: 任务 '{task.name}' ({task.id}) 在 add_task 完成后仍未被调度，但状态为 ACTIVE!")
+        elif job_found_after_ensure:
+            logger.info(f"任务 '{task.name}' ({task.id}) 已成功添加并确认调度.")
+        else:
+            logger.info(f"任务 '{task.name}' ({task.id}) 添加处理完毕 (状态: {task.status.value}).")
     
     def update_task(self, task: CustomTask):
         """更新任务"""
@@ -178,6 +226,7 @@ class TaskScheduler:
     
     def _schedule_task(self, task: CustomTask):
         """调度任务"""
+        logger.info(f"开始调度任务 '{task.name}', 状态: {task.status}, 状态值: {task.status.value}, 类型: {type(task.status)}")
         if task.status != TaskStatus.ACTIVE:
             logger.info(f"任务 '{task.name}' 状态为 {task.status.value}，不进行调度")
             return
@@ -457,50 +506,92 @@ class TaskScheduler:
     def ensure_scheduler_running(self):
         """确保调度器正在运行并且任务已正确调度"""
         with self._scheduler_lock:
-            # 检查是否有活跃任务但没有调度的情况
             active_task_count = sum(1 for task in self.tasks.values() if task.status == TaskStatus.ACTIVE)
-            scheduled_job_count = len(schedule.jobs)
-            
-            logger.info(f"检查调度器状态 - 活跃任务数: {active_task_count}, 已调度任务数: {scheduled_job_count}")
-            
-            # 打印所有活跃任务的详细信息（仅在有差异时）
+            # 获取当前 schedule.jobs 中所有有效的 task_id
+            scheduled_task_ids = set()
+            for job in schedule.jobs:
+                if job.tags: # Ensure job.tags is not None
+                    for tag_item in job.tags:
+                        if tag_item in self.tasks: # 确保 tag 是一个已知的 task_id
+                            scheduled_task_ids.add(tag_item)
+                            break # 一个 job 对应一个 task_id
+
+            scheduled_job_count = len(scheduled_task_ids) # 使用实际被调度的、我们系统已知的 task_id 数量
+
+            logger.info(f"检查调度器状态 - 活跃任务数: {active_task_count}, 已识别的已调度任务数: {scheduled_job_count}")
+
+            reschedule_needed = False
             if active_task_count != scheduled_job_count:
-                logger.warning("活跃任务数与已调度任务数不匹配")
-                for task in self.tasks.values():
-                    if task.status == TaskStatus.ACTIVE:
-                        is_scheduled = any(task.id in job.tags for job in schedule.jobs)
-                        logger.info(f"任务 '{task.name}': 活跃={task.status == TaskStatus.ACTIVE}, 已调度={is_scheduled}")
+                logger.warning(f"活跃任务数({active_task_count})与已调度任务数({scheduled_job_count})不匹配. 将重新调度.")
+                active_task_ids_in_system = {task.id for task in self.tasks.values() if task.status == TaskStatus.ACTIVE}
+                missing_ids = active_task_ids_in_system - scheduled_task_ids
+                extra_ids_in_scheduler = scheduled_task_ids - active_task_ids_in_system
+                if missing_ids:
+                    logger.warning(f"以下活跃任务未被调度: {missing_ids}")
+                if extra_ids_in_scheduler:
+                    logger.warning(f"以下已调度任务不再活跃或在系统中未知: {extra_ids_in_scheduler}")
+                reschedule_needed = True
             
-            # 只有在真正需要时才重新调度
-            if active_task_count > 0 and scheduled_job_count == 0:
-                logger.warning("检测到所有任务未调度，正在重新调度所有任务")
-                self._reschedule_all_tasks()
-            elif active_task_count > scheduled_job_count:
-                logger.warning(f"检测到部分任务未调度（活跃: {active_task_count}, 已调度: {scheduled_job_count}），正在重新调度所有任务")
+            thread_needs_start = not self.running or self.thread is None or not self.thread.is_alive()
+
+            if thread_needs_start:
+                logger.warning("调度器线程未运行或已停止.")
+                if active_task_count > 0 and not reschedule_needed:
+                    logger.info("线程即将启动且有活跃任务，执行一次预调度以确保一致性.")
+                    reschedule_needed = True
+            
+            if reschedule_needed:
+                logger.info("开始执行重新调度所有任务的操作.")
                 self._reschedule_all_tasks()
             else:
-                logger.info("任务调度状态正常")
-            
-            # 确保后台线程在运行
-            if not self.running or self.thread is None or not self.thread.is_alive():
-                logger.warning("调度器线程未运行，正在启动...")
+                logger.info("调度器状态判断为正常，无需全局重新调度.")
+
+            if thread_needs_start:
+                logger.info("正在启动调度器后台线程...")
                 self.running = True
                 self.thread = threading.Thread(target=self._run_scheduler, daemon=True)
                 self.thread.start()
-                logger.info("调度器线程已启动")
+                logger.info("调度器后台线程已启动.")
+            else:
+                logger.info("调度器线程已在运行.")
     
     def _reschedule_all_tasks(self):
         """重新调度所有任务"""
         schedule.clear()
-        logger.info("已清除所有现有调度任务")
+        logger.info("已清除所有现有调度任务 (in _reschedule_all_tasks)")
         
-        active_tasks = 0
-        for task in self.tasks.values():
+        active_tasks_rescheduled = 0
+        # Iterate over a copy of task IDs if tasks dictionary might be modified during iteration by _schedule_task (e.g. status change)
+        # However, _schedule_task primarily modifies task.status for ONE_TIME tasks that are past due.
+        # Iterating directly over self.tasks.items() should be generally safe here as _schedule_task doesn't delete from self.tasks.
+        for task_id, task in self.tasks.items():
             if task.status == TaskStatus.ACTIVE:
+                logger.info(f"(Re-scheduling) 尝试调度任务: {task.name} ({task.id})")
                 self._schedule_task(task)
-                active_tasks += 1
+                active_tasks_rescheduled += 1
         
-        logger.info(f"已重新调度 {active_tasks} 个活跃任务")
+        logger.info(f"已重新调度 {active_tasks_rescheduled} 个活跃任务 (in _reschedule_all_tasks)")
+        
+        # 添加日志打印当前所有 jobs
+        if schedule.jobs:
+            logger.info("--- 当前调度器中的任务 (after _reschedule_all_tasks) ---")
+            for job_idx, job in enumerate(schedule.jobs):
+                job_tags_str = "No Tags"
+                if job.tags: # Ensure job.tags is not None
+                    job_tags_str = ', '.join(str(t) for t in job.tags)
+                
+                next_run_time_str = "N/A"
+                if job.next_run:
+                    try:
+                        next_run_time_str = job.next_run.strftime('%Y-%m-%d %H:%M:%S')
+                    except Exception as e:
+                        next_run_time_str = f"Error getting next_run: {e}"
+                
+                job_func_repr = repr(job.job_func)
+                logger.info(f"  Job {job_idx}: Tags=[{job_tags_str}], Next Run={next_run_time_str}, Job Func={job_func_repr[:100]}") # Log first 100 chars of func repr
+            logger.info("----------------------------------------------------")
+        else:
+            logger.info("调度器中当前没有任务 (after _reschedule_all_tasks).")
     
     def start_scheduler(self):
         """启动调度器"""
@@ -983,6 +1074,9 @@ def show_create_task():
         submitted = st.form_submit_button("创建任务", type="primary")
         
         if submitted:
+            # 兜底：再次确保recurring_pattern有值
+            if st.session_state.task_type == TaskType.RECURRING and (not recurring_pattern or recurring_pattern.strip() == ""):
+                recurring_pattern = "daily"
             if not task_name:
                 st.error("请输入任务名称")
             elif not execute_time_str:

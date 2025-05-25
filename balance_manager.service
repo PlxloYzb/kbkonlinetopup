@@ -1,0 +1,17 @@
+[Unit]
+Description=Balance Manager Service
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=${USER}
+WorkingDirectory=${WORK_DIR}
+ExecStart=/usr/bin/python3 ${WORK_DIR}/balance_manager.py
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
