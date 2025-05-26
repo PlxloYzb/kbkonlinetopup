@@ -34,17 +34,32 @@ def get_departments(include_all=False):
         conn.close()
     return departments
 
-def get_users_by_department(department):
+def get_users_by_department(department, search_term=None):
     if not department or department == "(选择一个部门)":
         return []
     conn = get_db_connection()
     try:
-        if department == "(所有部门)":
-            users = pd.read_sql_query(f'SELECT DISTINCT user FROM {TABLE_NAME} ORDER BY user', conn)['user'].tolist()
-        else:
-            users = pd.read_sql_query(f'SELECT DISTINCT user FROM {TABLE_NAME} WHERE department = ? ORDER BY user', conn, params=(department,))['user'].tolist()
+        base_query = f'SELECT DISTINCT user FROM {TABLE_NAME}'
+        conditions = []
+        params = []
+
+        if department != "(所有部门)":
+            conditions.append('department = ?')
+            params.append(department)
+        
+        if search_term:
+            conditions.append('user LIKE ?')
+            params.append(f'%{search_term}%')
+
+        if conditions:
+            base_query += ' WHERE ' + ' AND '.join(conditions)
+        
+        base_query += ' ORDER BY user'
+        
+        users = pd.read_sql_query(base_query, conn, params=params if params else None)['user'].tolist()
+
     except Exception as e:
-        st.error(f"Error fetching users for department '{department}': {e}")
+        st.error(f"Error fetching users for department '{department}' with search term '{search_term}': {e}")
         users = []
     finally:
         conn.close()
@@ -78,8 +93,6 @@ def update_user_status(users_to_update, new_status):
 def job_to_schedule(users_to_update, new_status, job_id):
     print(f"[{datetime.now()}] Running job {job_id}: Setting status to {new_status} for users: {users_to_update}")
     update_user_status(users_to_update, new_status)
-    # Optional: Remove job if it's a one-time task or meant to run only once then be re-scheduled manually
-    # For recurring jobs, this is not needed unless you want to manage their lifecycle more dynamically.
 
 # --- Persistence Functions for Scheduled Jobs ---
 def load_scheduled_jobs():
@@ -152,16 +165,6 @@ if 'scheduled_jobs_info' not in st.session_state:
     if not st.session_state.scheduled_jobs_info: # If loading returned empty (e.g. no file, error), initialize as empty list
         st.session_state.scheduled_jobs_info = []
 
-# Note: job_to_schedule is now defined before load_scheduled_jobs to resolve NameError
-# def job_to_schedule(users_to_update, new_status, job_id): # This line is now removed as it's defined earlier
-
-# The following block was a duplicated and misplaced part of job_to_schedule, causing NameError.
-# It has been removed.
-#    print(f"[{datetime.now()}] Running job {job_id}: Setting status to {new_status} for users: {users_to_update}")
-#    update_user_status(users_to_update, new_status)
-#    # Optional: Remove job if it's a one-time task or meant to run only once then be re-scheduled manually
-#    # For recurring jobs, this is not needed unless you want to manage their lifecycle more dynamically.
-
 def run_scheduler():
     while True:
         schedule.run_pending()
@@ -176,7 +179,6 @@ if 'scheduler_thread_started' not in st.session_state:
     st.session_state.scheduler_thread_started = True
 
 # --- Streamlit UI ---
-# st.set_page_config(layout="wide") # Moved to the top of the script
 st.title("任务调度器 - 用户状态管理")
 
 # --- Manual Status Update Section ---
@@ -187,43 +189,57 @@ if not manual_departments_list:
     st.warning("No departments found in the database. Please check the database connection and data.")
 else:
     manual_selected_department = st.selectbox("选择部门 (手动):", ["(选择一个部门)"] + manual_departments_list, key="manual_dept")
+    manual_search_term = st.text_input("搜索用户 (手动):", key="manual_search_user", placeholder="输入用户名进行模糊搜索...")
 
     manual_users_in_department = []
     if manual_selected_department and manual_selected_department != "(选择一个部门)":
-        manual_users_in_department = get_users_by_department(manual_selected_department)
-        if not manual_users_in_department and manual_selected_department == "(所有部门)": # Handle case where 'All Departments' might return empty if DB is empty
-             manual_users_in_department = get_users_by_department("(所有部门)") # Re-fetch all users explicitly
+        manual_users_in_department = get_users_by_department(manual_selected_department, manual_search_term)
     
+    # Initialize session state for selected users if not present
+    if 'manual_selected_users' not in st.session_state:
+        st.session_state.manual_selected_users = []
+
     if manual_users_in_department:
         st.write(f"部门 '{manual_selected_department}'下的用户:")
         
         col1_manual, col2_manual = st.columns(2)
         with col1_manual:
-            if st.button("全选 (手动)", key="manual_select_all"):
-                st.session_state.manual_selected_users = manual_users_in_department
+            if st.button("全选当前搜索结果 (手动)", key="manual_select_all"):
+                current_selection = st.session_state.get('manual_selected_users', [])
+                newly_selected = [user for user in manual_users_in_department if user not in current_selection]
+                st.session_state.manual_selected_users = current_selection + newly_selected
         with col2_manual:
-            if st.button("取消全选 (手动)", key="manual_deselect_all"):
-                st.session_state.manual_selected_users = []
+            if st.button("取消全选当前搜索结果 (手动)", key="manual_deselect_all"):
+                current_selection = st.session_state.get('manual_selected_users', [])
+                st.session_state.manual_selected_users = [user for user in current_selection if user not in manual_users_in_department]
 
-        manual_selected_users = st.multiselect(
+        default_selection_for_multiselect = [user for user in st.session_state.get('manual_selected_users', []) if user in manual_users_in_department]
+
+        manual_newly_selected_users_in_multiselect = st.multiselect(
             "选择用户 (手动):", 
             manual_users_in_department, 
-            default=st.session_state.get('manual_selected_users', []),
+            default=default_selection_for_multiselect,
             key="manual_user_select"
         )
-        st.session_state.manual_selected_users = manual_selected_users # Keep session state updated
+        # Update session state
+        deselected_in_view = [user for user in default_selection_for_multiselect if user not in manual_newly_selected_users_in_multiselect]
+        selected_in_view = [user for user in manual_newly_selected_users_in_multiselect if user not in default_selection_for_multiselect]
+
+        preserved_selection = [user for user in st.session_state.get('manual_selected_users', []) if user not in manual_users_in_department]
+        st.session_state.manual_selected_users = preserved_selection + [user for user in default_selection_for_multiselect if user not in deselected_in_view] + selected_in_view
+        st.session_state.manual_selected_users = sorted(list(set(st.session_state.manual_selected_users)))
 
         col_set0, col_set1 = st.columns(2)
         with col_set0:
             if st.button("将选中用户状态置为 0", key="manual_set_0"):
-                if manual_selected_users:
-                    update_user_status(manual_selected_users, 0)
+                if st.session_state.manual_selected_users:
+                    update_user_status(st.session_state.manual_selected_users, 0)
                 else:
                     st.warning("请先选择用户。")
         with col_set1:
             if st.button("将选中用户状态置为 1", key="manual_set_1"):
-                if manual_selected_users:
-                    update_user_status(manual_selected_users, 1)
+                if st.session_state.manual_selected_users:
+                    update_user_status(st.session_state.manual_selected_users, 1)
                 else:
                     st.warning("请先选择用户。")
     elif manual_selected_department and manual_selected_department != "(选择一个部门)":
@@ -239,32 +255,46 @@ if not scheduled_departments_list:
     st.warning("无法加载部门用于计划任务。")
 else:
     scheduled_selected_department = st.selectbox("选择部门 (计划):", ["(选择一个部门)"] + scheduled_departments_list, key="sched_dept")
+    sched_search_term = st.text_input("搜索用户 (计划):", key="sched_search_user", placeholder="输入用户名进行模糊搜索...")
 
     scheduled_users_in_department = []
     if scheduled_selected_department and scheduled_selected_department != "(选择一个部门)":
-        scheduled_users_in_department = get_users_by_department(scheduled_selected_department)
-        if not scheduled_users_in_department and scheduled_selected_department == "(所有部门)": # Handle case where 'All Departments' might return empty if DB is empty
-            scheduled_users_in_department = get_users_by_department("(所有部门)") # Re-fetch all users explicitly
+        scheduled_users_in_department = get_users_by_department(scheduled_selected_department, sched_search_term)
+
+    # Initialize session state for selected users if not present
+    if 'sched_selected_users' not in st.session_state:
+        st.session_state.sched_selected_users = []
 
     if scheduled_users_in_department:
         st.write(f"部门 '{scheduled_selected_department}'下的用户 (计划任务):")
         col1_sched, col2_sched = st.columns(2)
         with col1_sched:
-            if st.button("全选 (计划)", key="sched_select_all"):
-                st.session_state.sched_selected_users = scheduled_users_in_department
+            if st.button("全选当前搜索结果 (计划)", key="sched_select_all"):
+                current_selection = st.session_state.get('sched_selected_users', [])
+                newly_selected = [user for user in scheduled_users_in_department if user not in current_selection]
+                st.session_state.sched_selected_users = current_selection + newly_selected
         with col2_sched:
-            if st.button("取消全选 (计划)", key="sched_deselect_all"):
-                st.session_state.sched_selected_users = []
+            if st.button("取消全选当前搜索结果 (计划)", key="sched_deselect_all"):
+                current_selection = st.session_state.get('sched_selected_users', [])
+                st.session_state.sched_selected_users = [user for user in current_selection if user not in scheduled_users_in_department]
         
-        sched_selected_users = st.multiselect(
+        default_selection_for_sched_multiselect = [user for user in st.session_state.get('sched_selected_users', []) if user in scheduled_users_in_department]
+
+        sched_newly_selected_users_in_multiselect = st.multiselect(
             "选择用户 (计划):", 
             scheduled_users_in_department, 
-            default=st.session_state.get('sched_selected_users', []),
+            default=default_selection_for_sched_multiselect,
             key="sched_user_select"
         )
-        st.session_state.sched_selected_users = sched_selected_users
 
-        if sched_selected_users:
+        deselected_in_sched_view = [user for user in default_selection_for_sched_multiselect if user not in sched_newly_selected_users_in_multiselect]
+        selected_in_sched_view = [user for user in sched_newly_selected_users_in_multiselect if user not in default_selection_for_sched_multiselect]
+
+        preserved_sched_selection = [user for user in st.session_state.get('sched_selected_users', []) if user not in scheduled_users_in_department]
+        st.session_state.sched_selected_users = preserved_sched_selection + [user for user in default_selection_for_sched_multiselect if user not in deselected_in_sched_view] + selected_in_sched_view
+        st.session_state.sched_selected_users = sorted(list(set(st.session_state.sched_selected_users)))
+
+        if st.session_state.sched_selected_users:
             task_status_to_set = st.radio("设置状态为:", (0, 1), key="sched_status_val", horizontal=True)
             
             schedule_type = st.selectbox("选择计划类型:", ["每日", "每周"], key="sched_type")
@@ -278,21 +308,21 @@ else:
             schedule_time_str = st.text_input("输入执行时间 (HH:MM 格式):", "09:00", key="sched_time_text")
             
             if st.button("创建计划任务", key="create_schedule_task"):
-                if not sched_selected_users:
+                if not st.session_state.sched_selected_users:
                     st.warning("请选择要执行计划任务的用户。")
                 else:
                     try:
                         parsed_time = datetime.strptime(schedule_time_str, "%H:%M").time()
                     except ValueError:
                         st.error("时间格式无效，请输入 HH:MM 格式的时间，例如 09:30 或 17:00。")
-                        st.stop() # Stop execution if time is invalid
+                        st.stop()
 
                     job_id = f"job_{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-                    task_description = f"将用户 {', '.join(sched_selected_users)} 的状态设置为 {task_status_to_set}"
+                    task_description = f"将用户 {', '.join(st.session_state.sched_selected_users)} 的状态设置为 {task_status_to_set}"
                     schedule_details = f"于 {parsed_time.strftime('%H:%M')}"
 
                     current_job = None
-                    schedule_time_for_lib = parsed_time.strftime("%H:%M") # schedule library expects HH:MM string
+                    schedule_time_for_lib = parsed_time.strftime("%H:%M")
 
                     if schedule_type == "每日":
                         current_job = schedule.every().day.at(schedule_time_for_lib)
@@ -303,21 +333,21 @@ else:
                         schedule_details = f"每周{selected_day_display} {schedule_details}"
                     
                     if current_job:
-                        current_job.do(job_to_schedule, users_to_update=list(sched_selected_users), new_status=task_status_to_set, job_id=job_id).tag(job_id)
+                        current_job.do(job_to_schedule, users_to_update=list(st.session_state.sched_selected_users), new_status=task_status_to_set, job_id=job_id).tag(job_id)
                         
                         job_info_to_save = {
                             "id": job_id,
                             "description": task_description,
-                            "schedule": schedule_details, # This is for display, actual scheduling done above
-                            "users": list(sched_selected_users),
+                            "schedule": schedule_details,
+                            "users": list(st.session_state.sched_selected_users),
                             "status_to_set": task_status_to_set,
                             "type": schedule_type,
                             "day_of_week": selected_day_display if selected_day_of_week else None,
-                            "day_of_week_internal": selected_day_of_week, # Store the internal schedule library day name
+                            "day_of_week_internal": selected_day_of_week,
                             "time": parsed_time.strftime('%H:%M')
                         }
                         st.session_state.scheduled_jobs_info.append(job_info_to_save)
-                        save_scheduled_jobs() # Save after adding a new job
+                        save_scheduled_jobs()
                         st.success(f"计划任务已创建: {task_description} {schedule_details}")
                     else:
                         st.error("无法创建计划任务，请检查配置。")
@@ -333,11 +363,8 @@ else:
         cols = st.columns([0.1, 0.6, 0.2, 0.1])
         cols[0].write(f"#{i+1}")
         cols[1].write(f"**任务**: {job_info['description']}\n**计划**: {job_info['schedule']}")
-        # cols[2].write(f"{job_info['id']}") # Display job_id for debugging or advanced management
         if cols[3].button("删除", key=f"del_job_{job_info['id']}"):
-            schedule.clear(job_info['id']) # Remove from schedule library
+            schedule.clear(job_info['id'])
             st.session_state.scheduled_jobs_info = [j for j in st.session_state.scheduled_jobs_info if j['id'] != job_info['id']]
-            save_scheduled_jobs() # Save after deleting a job
+            save_scheduled_jobs()
             st.rerun()
-
-# To run this Streamlit app: streamlit run dispatch_server.py
