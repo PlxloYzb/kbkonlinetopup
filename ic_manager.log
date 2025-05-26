@@ -1627,3 +1627,20 @@
 2025-05-26 17:52:41.f - INFO - [SYS] 等待新连接...
 2025-05-26 17:53:01.f - INFO - [SYS] 新连接来自 ('192.168.1.102', 21408)
 2025-05-26 17:53:01.f - INFO - [SYS] 等待新连接...
+2025-05-26 18:07:51.f - INFO - [SYS] 检测到键盘中断，服务器即将停止
+2025-05-26 18:07:51.f - INFO - [SYS] 服务器已关闭
+2025-05-26 18:07:59.f - INFO - [SYS] 脚本启动，准备初始化数据库
+2025-05-26 18:07:59.f - INFO - [DB] 连接数据库: ic_manager.db
+2025-05-26 18:07:59.f - INFO - [DB] 创建表: kbk_ic_manager
+2025-05-26 18:07:59.f - INFO - [DB] 创建索引: idx_card ON kbk_ic_manager(card)
+2025-05-26 18:07:59.f - INFO - [DB] 创建表: kbk_ic_en_count
+2025-05-26 18:07:59.f - INFO - [DB] 创建表: kbk_ic_cn_count
+2025-05-26 18:07:59.f - INFO - [DB] 创建表: kbk_ic_nm_count
+2025-05-26 18:07:59.f - INFO - [DB] 创建表: kbk_ic_failure_records
+2025-05-26 18:07:59.f - INFO - [DB] 数据库初始化完成并已提交更改
+2025-05-26 18:07:59.f - INFO - Database initialized successfully
+2025-05-26 18:07:59.f - INFO - [SYS] 数据库初始化完成
+2025-05-26 18:07:59.f - INFO - [SYS] 创建TCP服务器套接字
+2025-05-26 18:07:59.f - INFO - [SYS] 绑定端口9024，准备监听
+2025-05-26 18:07:59.f - ERROR - [SYS] 服务器启动或运行异常: [Errno 8] nodename nor servname provided, or not known
+2025-05-26 18:07:59.f - INFO - [SYS] 服务器已关闭

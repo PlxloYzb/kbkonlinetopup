@@ -444,7 +444,7 @@ def main():
     try:
         logger.info("[SYS] 绑定端口9024，准备监听")
         # 绑定端口并监听
-        tcp_server_socket.bind(("0,0,0,0", 9024))  # 使用9024端口，与读卡器默认端口一致
+        tcp_server_socket.bind(("0.0.0.0", 9024))  # 使用9024端口，与读卡器默认端口一致
         tcp_server_socket.listen(128)
         logger.info("[SYS] 服务器启动成功，监听端口9024，等待连接")
         
