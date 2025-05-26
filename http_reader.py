@@ -21,7 +21,7 @@ from datetime import time as time_obj
 # 定义允许刷卡的时间段
 breakfast = (time_obj(5, 25), time_obj(7, 40))  # 05:25-07:40
 lunch = (time_obj(10, 20), time_obj(12, 35))     # 11:20-12:35
-dinner = (time_obj(16, 00), time_obj(23, 40))   # 16:00-23:40
+dinner = (time_obj(16, 00), time_obj(23, 40))   # 16:55-19:40
 
 # 全局服务器套接字引用（用于优雅关闭）
 tcp_server_socket = None
@@ -47,7 +47,7 @@ def setup_logging():
     # 设置日志格式
     formatter = logging.Formatter(
         '%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        datefmt='%Y-%m-%d %H:%M:%S.%f'
     )
     handler.setFormatter(formatter)
     
@@ -366,65 +366,76 @@ def process_heartbeat(info, dn):
 
 
 def parse_request(request):
-    """解析HTTP请求获取参数"""
+    """解析HTTP请求获取参数，严格按照厂商示例"""
     try:
-        logger.debug(f"[PARSE] 开始解析请求，请求长度: {len(request)}")
+        logger.debug(f"[PARSE] 原始请求数据:\n{request}")
         request_header_lines = request.splitlines()
         requestlines = len(request_header_lines)
         logger.debug(f"[PARSE] 请求行数: {requestlines}")
-        
+
+        CommitParameter = ""
         # 解析GET请求
         if request.startswith("GET"):
             logger.debug("[PARSE] 处理GET请求")
-            try:
-                start_idx = request_header_lines[0].find("?") + 1
-                end_idx = request_header_lines[0].find("HTTP/1.1") - 1
-                if start_idx > 0 and end_idx > start_idx:
-                    CommitParameter = request_header_lines[0][start_idx:end_idx]
-                    logger.debug(f"[PARSE] GET参数: {CommitParameter}")
-                else:
-                    logger.warning("[PARSE] GET请求无参数")
-                    return {}
-            except Exception as e:
-                logger.error(f"[PARSE] 解析GET请求失败: {e}")
+            # 查找 "?" 和 "HTTP/1.1"
+            query_start_index = request_header_lines[0].find("?")
+            http_version_index = request_header_lines[0].find(" HTTP/1.1") # Ensure space before HTTP
+
+            if query_start_index != -1 and http_version_index != -1 and query_start_index < http_version_index:
+                CommitParameter = request_header_lines[0][query_start_index + 1:http_version_index]
+                logger.debug(f"[PARSE] GET参数: {CommitParameter}")
+            else:
+                logger.warning("[PARSE] GET请求中未找到有效的参数字符串")
                 return {}
-                
         # 解析POST请求
         elif request.startswith("POST"):
             logger.debug("[PARSE] 处理POST请求")
-            try:
-                CommitParameter = request_header_lines[requestlines-1]
-                logger.debug(f"[PARSE] POST原始参数: {CommitParameter}")
-                # 处理JSON格式
-                if "Content-Type: application/json" in request:
-                    logger.debug("[PARSE] 检测到JSON格式，进行转换")
+            if requestlines > 0:
+                CommitParameter = request_header_lines[requestlines-1] # 参数在最后一行
+                logger.debug(f"[PARSE] POST原始参数行: {CommitParameter}")
+                
+                # 检查Content-Type是否为application/json
+                is_json = False
+                for line in request_header_lines:
+                    if line.lower().startswith("content-type:") and "application/json" in line.lower():
+                        is_json = True
+                        break
+                
+                if is_json:
+                    logger.debug("[PARSE] 检测到JSON格式 (application/json)，进行转换")
                     CommitParameter = CommitParameter.replace("{", "")
                     CommitParameter = CommitParameter.replace("\"", "")
                     CommitParameter = CommitParameter.replace(":", "=")
                     CommitParameter = CommitParameter.replace(",", "&")
                     CommitParameter = CommitParameter.replace("}", "")
                     logger.debug(f"[PARSE] JSON转换后参数: {CommitParameter}")
-            except Exception as e:
-                logger.error(f"[PARSE] 解析POST请求失败: {e}")
+            else:
+                logger.warning("[PARSE] POST请求内容为空")
                 return {}
         else:
-            logger.warning(f"[PARSE] 未知请求类型: {request[:20]}")
+            logger.warning(f"[PARSE] 未知请求类型: {request[:40]}") # Log more for unknown type
             return {}
         
         # 解析参数
         params = {}
+        if not CommitParameter:
+            logger.warning("[PARSE] 解析后CommitParameter为空，无参数可提取")
+            return {}
+            
         FieldsList = CommitParameter.split('&')
         logger.debug(f"[PARSE] 参数字段列表: {FieldsList}")
         for field in FieldsList:
             if '=' in field:
                 key, value = field.split('=', 1)
                 params[key.strip()] = value.strip()
+            else:
+                logger.debug(f"[PARSE] 忽略无效字段 (无'=') : {field}")
         
-        logger.debug(f"[PARSE] 解析完成，参数: {params}")
+        logger.info(f"[PARSE] 解析完成，参数: {params}")
         return params
         
     except Exception as e:
-        logger.error(f"[PARSE] 解析请求时发生异常: {e}")
+        logger.error(f"[PARSE] 解析请求时发生异常: {e}", exc_info=True)
         return {}
 
 
@@ -444,167 +455,137 @@ def service_client(new_socket, client_addr):
     
     try:
         # 设置套接字超时
-        new_socket.settimeout(10.0)
-        logger.debug(f"[NET] 已设置套接字超时: 10秒")
+        new_socket.settimeout(30.0) # 保持30秒超时
+        logger.debug(f"[NET] 已设置套接字超时: 30秒 for {client_ip}:{client_port}")
         
-        # 接收HTTP请求
-        logger.debug(f"[NET] 开始接收数据从 {client_ip}:{client_port}")
-        request_data = b""
+        # 接收HTTP请求 - 遵循示例的单次接收逻辑
+        logger.info(f"[NET] 开始接收数据 from {client_ip}:{client_port} (一次性接收)")
+        request_data = new_socket.recv(4096) # 示例使用1024，此处用4096以防万一，但行为应类似
         
-        try:
-            # 设置较短的接收超时，避免长时间阻塞
-            new_socket.settimeout(5.0)
-            logger.debug(f"[NET] 调整接收超时为5秒: {client_ip}:{client_port}")
-            
-            # 分块接收数据，避免数据不完整
-            max_recv_attempts = 3
-            recv_attempts = 0
-            
-            while recv_attempts < max_recv_attempts:
-                try:
-                    chunk = new_socket.recv(1024)
-                    if not chunk:
-                        logger.debug(f"[NET] 接收到空数据块，连接可能已关闭: {client_ip}:{client_port}")
-                        break
-                        
-                    request_data += chunk
-                    logger.debug(f"[NET] 接收数据块，大小: {len(chunk)}, 总大小: {len(request_data)}")
-                    
-                    # 检查是否接收完整的HTTP请求
-                    if b'\r\n\r\n' in request_data:
-                        logger.debug(f"[NET] 检测到完整HTTP头: {client_ip}:{client_port}")
-                        
-                        # 如果是POST请求，可能还有body数据
-                        if request_data.startswith(b'POST'):
-                            logger.debug(f"[NET] POST请求，尝试接收body数据: {client_ip}:{client_port}")
-                            try:
-                                # 设置更短的超时等待body数据
-                                new_socket.settimeout(1.0)
-                                additional_data = new_socket.recv(1024)
-                                if additional_data:
-                                    request_data += additional_data
-                                    logger.debug(f"[NET] 接收到额外body数据: {len(additional_data)}")
-                            except socket.timeout:
-                                logger.debug(f"[NET] body数据接收超时，可能没有更多数据: {client_ip}:{client_port}")
-                                pass  # 超时是正常的，说明没有更多数据
-                        break
-                        
-                    # 如果数据看起来像简单的GET请求（没有标准HTTP头结束符）
-                    elif (b'GET /' in request_data or b'POST /' in request_data) and len(request_data) > 50:
-                        logger.debug(f"[NET] 检测到简单HTTP请求: {client_ip}:{client_port}")
-                        break
-                        
-                except socket.timeout:
-                    recv_attempts += 1
-                    logger.warning(f"[NET] 接收数据超时，尝试次数: {recv_attempts}/{max_recv_attempts}: {client_ip}:{client_port}")
-                    if recv_attempts >= max_recv_attempts:
-                        break
-                    continue
-                except Exception as recv_error:
-                    logger.error(f"[NET] 接收数据时发生异常: {client_ip}:{client_port}, 错误: {recv_error}")
-                    break
-                    
-        except socket.timeout:
-            logger.warning(f"[NET] 接收数据超时: {client_ip}:{client_port}")
-            return
-        except Exception as e:
-            logger.error(f"[NET] 接收数据失败: {client_ip}:{client_port}, 错误: {e}")
-            return
-            
         if not request_data:
-            logger.warning(f"[NET] 未接收到数据: {client_ip}:{client_port}")
-            return
-            
+            logger.warning(f"[NET] 未接收到数据 from {client_ip}:{client_port}. 连接可能已由客户端关闭.")
+            return # 不关闭socket，service_client的finally会处理
+
+        logger.info(f"[NET] 从 {client_ip}:{client_port} 接收到 {len(request_data)} 字节数据")
+        logger.debug(f"[NET] 原始接收数据 (前200字节): {request_data[:200]}")
+
+        request_str = ""
         try:
-            request = request_data.decode('utf-8')
-            logger.debug(f"[NET] 成功解码请求数据，长度: {len(request)}")
+            request_str = request_data.decode('utf-8')
+            logger.debug(f"[NET] 使用UTF-8解码请求成功 from {client_ip}:{client_port}")
         except UnicodeDecodeError:
+            logger.warning(f"[NET] UTF-8解码失败, 尝试GBK解码 for {client_ip}:{client_port}")
             try:
-                request = request_data.decode('gbk')
-                logger.debug(f"[NET] 使用GBK编码解码请求数据，长度: {len(request)}")
+                request_str = request_data.decode('gbk')
+                logger.debug(f"[NET] 使用GBK解码请求成功 from {client_ip}:{client_port}")
             except UnicodeDecodeError as e:
-                logger.error(f"[NET] 无法解码请求数据: {client_ip}:{client_port}, 错误: {e}")
-                return
+                logger.error(f"[NET] GBK解码也失败 for {client_ip}:{client_port}. 错误: {e}. 数据 (前200字节): {request_data[:200]}")
+                return # 不关闭socket，service_client的finally会处理
         
-        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        logger.debug(f"[NET] 成功接收并解码请求: {client_ip}:{client_port}, 请求类型: {request[:10].strip()}")
-        logger.info(f"[NET] Request received at {current_time} from {client_ip}:{client_port}")
+        current_time_log = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        logger.info(f"[NET] Request fully received and decoded at {current_time_log} from {client_ip}:{client_port}")
         
         # 解析请求参数
-        params = parse_request(request)
+        params = parse_request(request_str)
         if not params:
-            logger.warning(f"[NET] 无法解析请求参数: {client_ip}:{client_port}")
-            try:
-                new_socket.close()
-            except:
-                pass
+            logger.warning(f"[NET] 无法解析请求参数 or 请求参数为空 from {client_ip}:{client_port}. Raw request:\n{request_str}")
+            # 按照示例，未知请求也可能直接关闭，但这里我们依赖上层逻辑判断是否响应
+            # 不关闭socket，service_client的finally会处理
             return
-        
-        # 提取关键参数
+
+        # 提取关键参数 (与之前一致)
         info = params.get('info', '')
-        dn = params.get('dn', '')
+        dn = params.get('dn', '') # 设备硬件序列号
         heartbeattype = params.get('heartbeattype', '')
-        card = params.get('card', '')
-        jihao = params.get('jihao', '')
+        card = params.get('card', '') # 卡号
+        jihao = params.get('jihao', '') # 设备机号
+
+        # 新增：提取厂商示例中提到的其他参数并记录，即使当前业务不用
+        cardtype = params.get('cardtype', '')
+        pushortake_str = params.get('cardtype', '') # cardtype原始值用于计算pushortake
+        data_param = params.get('data', '') # 区分 'data' 参数和上面的 request_data 变量
+        status_param = params.get('status', '')
+        scantype = params.get('scantype', '')
         
-        logger.info(f"[NET] 解析到参数: info={info}, dn={dn}, heartbeattype={heartbeattype}, card={card}, jihao={jihao}")
+        pushortake = -1 # 默认值
+        if cardtype:
+            try:
+                typenum = int(cardtype, 16) % 16
+                pushortake = int(int(pushortake_str, 16) / 128)
+                logger.info(f"[NET] 附加参数: cardtype={cardtype} (typenum={typenum}), pushortake={pushortake}, data_param={data_param}, status_param={status_param}, scantype={scantype}")
+            except ValueError:
+                logger.warning(f"[NET] 解析cardtype获取pushortake失败: cardtype='{cardtype}'")
+        else:
+            logger.info(f"[NET] 附加参数: cardtype 未提供, data_param={data_param}, status_param={status_param}, scantype={scantype}")
+
+
+        logger.info(f"[NET] 解析到核心参数 from {client_ip}:{client_port}: info={info}, dn={dn}, heartbeattype={heartbeattype}, card={card}, jihao={jihao}")
         
         response_str = ""
         
-        # 处理心跳包
+        # 处理心跳包 (逻辑与之前一致)
         if heartbeattype == "1" and len(dn) == 16 and len(info) > 0:
-            logger.info(f"[NET] 处理心跳包: device={dn}")
+            logger.info(f"[NET] 处理心跳包 for {client_ip}:{client_port}, device={dn}")
             response_str = process_heartbeat(info, dn)
             
-        # 处理刷卡
-        elif len(dn) == 16 and len(card) > 4 and len(info) > 0:
-            logger.info(f"[NET] 处理刷卡请求: card={card}, device={dn}")
+        # 处理刷卡 (逻辑与之前一致)
+        # 注意：示例代码中还有 scantype=="1" 的扫码逻辑，这里暂未合并，保持原有刷卡逻辑
+        elif len(dn) == 16 and len(card) > 4 and len(info) > 0: # 原始刷卡判断
+            logger.info(f"[NET] 处理刷卡请求 for {client_ip}:{client_port}, card={card}, device={dn}")
             response_str = process_card(card, jihao, info, dn)
             
+        # 新增：根据厂商示例处理扫码数据 (如果需要)
+        # elif scantype == "1" and len(dn) == 16 and len(data_param) > 0 and len(info) > 0:
+        #     logger.info(f"[NET] 处理扫码请求 for {client_ip}:{client_port}, data={data_param}, device={dn}")
+        #     # ChineseVoice = GetChineseCode("[v8]"+data_param)
+        #     # response_str = f"Response=1,{info}," + GetChineseCode("{扫码:}") + data_param + "\\n\\n"
+        #     # response_str += ",20,1," + ChineseVoice + ",20,30" # 示例响应格式
+        #     # 此处应调用一个 process_scan_code(info, data_param, dn) 之类的函数
+        #     logger.warning("[NET] 扫码逻辑识别，但尚未实现完整处理函数")
+        #     response_str = create_error_response(info, "扫码功能未完全实现") # 临时响应
+
         else:
-            logger.warning(f"[NET] 未识别的请求类型: {params}")
+            logger.warning(f"[NET] 未识别的请求类型或参数不足 from {client_ip}:{client_port}. Params: {params}. Raw request: {request_str[:200]}...")
+            # 按照示例，未知请求也可能直接关闭，但这里我们依赖上层逻辑判断是否响应
+            # 可以选择发送一个通用错误或不响应，让连接超时关闭
+            # response_str = create_error_response(info, "未知请求") # 可选的错误响应
+            # 如果不发送响应，客户端可能会等待直到超时
+            # 为保持原逻辑，这里不主动发错误，依赖finally中关闭
+            pass # 无匹配的响应，最终会在finally中关闭socket
+
+        # 发送响应
+        if response_str: # 仅当有响应内容时发送
             try:
-                new_socket.close()
-            except:
-                pass
-            return
-        
-                    # 发送响应
-            try:
-                logger.debug(f"[NET] 准备发送响应: {response_str}")
-                response_bytes = response_str.encode("gbk")
-                
-                # 设置发送超时
-                new_socket.settimeout(5.0)
-                
-                # 发送数据
-                bytes_sent = new_socket.send(response_bytes)
-                logger.info(f"[NET] 响应已发送到 {client_ip}:{client_port}, 长度: {len(response_bytes)}, 实际发送: {bytes_sent}")
-                
-                # 确认所有数据都已发送
-                if bytes_sent < len(response_bytes):
-                    logger.warning(f"[NET] 响应数据未完全发送: {client_ip}:{client_port}, 已发送: {bytes_sent}/{len(response_bytes)}")
-            except socket.timeout:
-                logger.error(f"[NET] 发送响应超时: {client_ip}:{client_port}")
+                logger.debug(f"[NET] 准备发送响应 to {client_ip}:{client_port}: {response_str}")
+                response_bytes = response_str.encode("gbk") # 厂商示例指定GBK
+                new_socket.sendall(response_bytes) # 使用sendall确保完整发送
+                logger.info(f"[NET] 响应已完整发送到 {client_ip}:{client_port}, 长度: {len(response_bytes)}")
+            except socket.error as e: # 更具体的socket错误捕获
+                logger.error(f"[NET] 发送响应失败 to {client_ip}:{client_port}. Socket Error: {e}. Response: {response_str}")
             except Exception as e:
-                logger.error(f"[NET] 发送响应失败: {client_ip}:{client_port}, 错误: {e}")
+                logger.error(f"[NET] 发送响应时发生未知异常 to {client_ip}:{client_port}. Error: {e}. Response: {response_str}")
+        else:
+            logger.info(f"[NET] 无响应内容可发送 for {client_ip}:{client_port}. 请求可能是无法处理的类型或已在业务逻辑中处理完毕但未生成标准响应.")
         
-        # 关闭连接
-        try:
-            new_socket.close()
-            logger.debug(f"[NET] 连接已关闭: {client_ip}:{client_port}")
-        except Exception as e:
-            logger.error(f"[NET] 关闭连接失败: {client_ip}:{client_port}, 错误: {e}")
-        
+    except socket.timeout:
+        logger.warning(f"[NET] 套接字操作超时 for {client_ip}:{client_port}. 可能在 recv() 或 sendall() 时发生.")
+    except socket.error as e:
+        logger.error(f"[NET] 套接字通讯发生错误 for {client_ip}:{client_port}: {e}")
     except Exception as e:
-        logger.error(f"[NET] 处理客户端连接时发生异常: {client_ip}:{client_port}, 错误: {e}")
-        try:
-            new_socket.close()
-        except:
-            pass
+        logger.error(f"[NET] 处理客户端连接时发生未捕获的顶级异常 for {client_ip}:{client_port}: {e}", exc_info=True)
     finally:
-        update_connection_count(-1)
-        logger.info(f"[NET] 客户端连接处理完成: {client_ip}:{client_port}")
+        try:
+            new_socket.shutdown(socket.SHUT_RDWR) # 优雅关闭发送和接收
+        except socket.error as e:
+            if e.errno != socket.errno.ENOTCONN: # 忽略 "Socket is not connected" 错误
+                 logger.warning(f"[NET] socket.shutdown() 失败 for {client_ip}:{client_port}: {e}")
+        except Exception as e: # 其他可能的异常
+            logger.warning(f"[NET] socket.shutdown() 发生未知异常 for {client_ip}:{client_port}: {e}")
+        finally: # 确保最终关闭
+            new_socket.close()
+            logger.info(f"[NET] 连接已关闭: {client_ip}:{client_port}")
+            update_connection_count(-1) # 确保在任何情况下都更新连接数
+            logger.info(f"[NET] 客户端连接处理完成: {client_ip}:{client_port}")
 
 
 def update_card_status(card, new_status):
@@ -732,10 +713,6 @@ def main():
         server_host = "0.0.0.0"
         server_port = 9024
         
-        # 设置服务器套接字超时，避免accept阻塞太久
-        tcp_server_socket.settimeout(60.0)
-        logger.info(f"[NET] 设置服务器套接字超时: 60秒")
-        
         logger.info(f"[NET] 绑定地址: {server_host}:{server_port}")
         tcp_server_socket.bind((server_host, server_port))
         logger.info(f"[NET] 端口绑定成功: {server_port}")
@@ -761,12 +738,8 @@ def main():
             try:
                 logger.debug("[NET] 等待新连接...")
                 # 接受新连接
-                try:
-                    new_socket, client_addr = tcp_server_socket.accept()
-                    logger.info(f"[NET] 新连接已建立: {client_addr[0]}:{client_addr[1]}")
-                except socket.timeout:
-                    logger.debug("[NET] accept超时，继续监听...")
-                    continue
+                new_socket, client_addr = tcp_server_socket.accept()
+                logger.info(f"[NET] 新连接已建立: {client_addr[0]}:{client_addr[1]}")
                 
                 # 创建新线程处理连接
                 thread_name = f"Client-{client_addr[0]}:{client_addr[1]}"
