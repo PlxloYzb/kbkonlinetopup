@@ -442,11 +442,11 @@ def main():
     tcp_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     
     try:
-        logger.info("[SYS] 绑定端口99，准备监听")
+        logger.info("[SYS] 绑定端口9024，准备监听")
         # 绑定端口并监听
-        tcp_server_socket.bind(("", 99))  # 使用99端口，与读卡器默认端口一致
+        tcp_server_socket.bind(("", 9024))  # 使用9024端口，与读卡器默认端口一致
         tcp_server_socket.listen(128)
-        logger.info("[SYS] 服务器启动成功，监听端口99，等待连接")
+        logger.info("[SYS] 服务器启动成功，监听端口9024，等待连接")
         
         # 主循环
         while True:
