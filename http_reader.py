@@ -201,27 +201,41 @@ def get_local_timestamp():
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 def reset_daily_counts_if_needed():
-    """检查并重置每日刷卡计数（凌晨5点）"""
+    """检查并重置每日刷卡计数（凌晨5点开始新周期）"""
     global daily_swipe_counts, last_reset_day
     with count_reset_lock:
         now = datetime.datetime.now()
         today = now.date()
         five_am = time_obj(5, 0)
-
-        if (last_reset_day is None or last_reset_day != today) and now.time() >= five_am:
-            logger.info(f"[COUNT] Performing daily swipe count reset. Previous reset day: {last_reset_day}, Current time: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # 计算当前应该属于哪个计次周期的日期
+        # 如果当前时间在0:00-4:59，则属于前一天的计次周期
+        if now.time() < five_am:
+            cycle_date = today - datetime.timedelta(days=1)
+        else:
+            cycle_date = today
+        
+        # 如果是首次运行或者进入了新的计次周期，则重置计数
+        if last_reset_day is None or last_reset_day != cycle_date:
+            logger.info(f"[COUNT] Performing daily swipe count reset. Previous reset cycle: {last_reset_day}, Current cycle: {cycle_date}, Current time: {now.strftime('%Y-%m-%d %H:%M:%S')}")
             daily_swipe_counts.clear()
-            last_reset_day = today
-            logger.info(f"[COUNT] Daily swipe counts have been reset for {today}. Counts: {daily_swipe_counts}")
-        elif last_reset_day is not None and last_reset_day != today and now.time() < five_am:
-            logger.info(f"[COUNT] New day ({today}), but before 05:00. Counts from {last_reset_day} are still active.")
+            last_reset_day = cycle_date
+            logger.info(f"[COUNT] Daily swipe counts have been reset for cycle {cycle_date}. Counts: {daily_swipe_counts}")
+        else:
+            logger.debug(f"[COUNT] Still in same cycle ({cycle_date}), no reset needed.")
 
 def process_card(card, jihao, info, dn=None):
     """处理刷卡业务逻辑"""
     reset_daily_counts_if_needed() # 在处理卡片前检查是否需要重置计数
     conn = None
     try:
-        logger.info(f"[BUSINESS] 开始处理刷卡: card={card}, jihao={jihao}, info={info}, dn={dn}")
+        logger.info(f"[BUSINESS] 开始处理刷卡: card={card}, jihao='{jihao}' (type: {type(jihao)}, len: {len(jihao)}), info={info}, dn={dn}")
+        
+        # 检查jihao是否有效
+        if not jihao or len(str(jihao).strip()) == 0:
+            logger.warning(f"[BUSINESS] jihao参数无效或为空: '{jihao}', 将使用默认值 '00000'")
+            jihao = "00000"  # 设置默认值
+        
         response_base = f"Response=1,{info}"
         
         current_time = datetime.datetime.now()
@@ -342,25 +356,29 @@ def process_card(card, jihao, info, dn=None):
         jihao_specific_count_for_display = 0
 
         with count_reset_lock: # Lock for reading and potential writing daily_swipe_counts
-            if now.time() >= time_obj(5,0):
-                # Increment count for successful swipe at/after 5 AM on the current reset cycle
-                count_for_jihao = daily_swipe_counts.get(jihao, 0)
-                count_for_jihao += 1
-                daily_swipe_counts[jihao] = count_for_jihao
-                jihao_specific_count_for_display = count_for_jihao
-                logger.info(f"[COUNT] Successful swipe for jihao {jihao} at {now.strftime('%H:%M:%S')} (>=05:00). Incremented count for today: {jihao_specific_count_for_display}")
-            else:
-                # Successful swipe but before 5 AM, display count from previous cycle (not incremented now)
-                jihao_specific_count_for_display = daily_swipe_counts.get(jihao, 0)
-                logger.info(f"[COUNT] Successful swipe for jihao {jihao} at {now.strftime('%H:%M:%S')} (<05:00). Displaying count from current cycle (not incremented): {jihao_specific_count_for_display}")
+            # 成功刷卡时，总是增加当前计次周期的计数
+            logger.info(f"[COUNT] Before increment - jihao: '{jihao}' (type: {type(jihao)}, len: {len(jihao)}), current daily_swipe_counts: {daily_swipe_counts}")
+            
+            # 确保jihao作为字符串键使用
+            jihao_key = str(jihao).strip()  # 去除可能的空格并确保是字符串
+            count_for_jihao = daily_swipe_counts.get(jihao_key, 0)
+            logger.info(f"[COUNT] Current count for jihao_key '{jihao_key}': {count_for_jihao}")
+            
+            count_for_jihao += 1
+            daily_swipe_counts[jihao_key] = count_for_jihao
+            jihao_specific_count_for_display = count_for_jihao
+            
+            logger.info(f"[COUNT] After increment - jihao_key '{jihao_key}': {jihao_specific_count_for_display}, full counts: {daily_swipe_counts}")
+            logger.info(f"[COUNT] Successful swipe for jihao '{jihao}' at {now.strftime('%H:%M:%S')}. Incremented count for current cycle: {jihao_specific_count_for_display}")
         
         logger.info(f"[BUSINESS] Card processed successfully: {card}, User: {user}, Jihao: {jihao}")
         
         # 构造成功响应
-        display_text_content = f"{{成功}}{user} {department} 第{jihao_specific_count_for_display}次"
+        display_text_content = f"{user} {department} 第{jihao_specific_count_for_display}次"
         display_text = GetChineseCode(display_text_content)
         voice_text = GetChineseCode("[v8]刷卡成功")
         
+        logger.info(f"[DISPLAY] 显示内容: {display_text_content}, 计数: {jihao_specific_count_for_display}")
         return f"{response_base},{display_text},10,2,{voice_text},0,0"
         
     except sqlite3.Error as e:
@@ -557,7 +575,7 @@ def service_client(new_socket, client_addr):
             logger.info(f"[NET] 附加参数: cardtype 未提供, data_param={data_param}, status_param={status_param}, scantype={scantype}")
 
 
-        logger.info(f"[NET] 解析到核心参数 from {client_ip}:{client_port}: info={info}, dn={dn}, heartbeattype={heartbeattype}, card={card}, jihao={jihao}")
+        logger.info(f"[NET] 解析到核心参数 from {client_ip}:{client_port}: info={info}, dn={dn}, heartbeattype={heartbeattype}, card={card}, jihao='{jihao}' (type: {type(jihao)}, len: {len(jihao)})")
         
         response_str = ""
         
