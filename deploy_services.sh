@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 定义服务名称数组
-SERVICES=("status_update_server" "manager_server" "http_reader")
+# 定义服务名称数组（新增dispatch_server）
+SERVICES=("status_update_server" "manager_server" "http_reader" "dispatch_server")
 
 # 检查是否以root运行
 check_root() {
@@ -66,7 +66,7 @@ status_services() {
 
 # 查看日志
 show_logs() {
-    journalctl -u ${SERVICES[0]}.service -u ${SERVICES[1]}.service -u ${SERVICES[2]}.service -n 50 --no-pager -o cat
+    journalctl -u ${SERVICES[0]}.service -u ${SERVICES[1]}.service -u ${SERVICES[2]}.service -u ${SERVICES[3]}.service -n 50 --no-pager -o cat
 }
 
 # 主菜单
@@ -102,7 +102,36 @@ create_template_files() {
             echo "检测到缺少 ${service}.service 文件"
             read -p "是否创建模板文件？(y/n): " create
             if [ "$create" = "y" ]; then
-                cat > "./${service}.service" <<EOF
+                # 特殊处理dispatch_server的启动命令
+                if [ "$service" == "dispatch_server" ]; then
+                    cat > "./${service}.service" <<EOF
+[Unit]
+Description=Streamlit任务调度器服务
+After=network.target
+
+[Service]
+Type=simple
+User=bruceplxl
+WorkingDirectory=/home/bruceplxl/deploy/kbkonlinetopup
+ExecStart=/bin/bash -c 'source /home/bruceplxl/miniconda3/bin/activate kbkonlinetopup && streamlit run dispatch_server.py --server.port=8501 --server.headless=true'
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+Environment="LC_ALL=C.UTF-8"
+Environment="LANG=C.UTF-8"
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+                else
+                    # 其他服务的通用模板
+                    py_file="${service}.py"
+                    [[ "$service" == "status_update_server" ]] && py_file="status_update_server.py"
+                    
+                    cat > "./${service}.service" <<EOF
 [Unit]
 Description=${service}服务
 After=network.target
@@ -111,7 +140,7 @@ After=network.target
 Type=simple
 User=bruceplxl
 WorkingDirectory=/home/bruceplxl/deploy/kbkonlinetopup
-ExecStart=/bin/bash -c 'source /home/bruceplxl/miniconda3/bin/activate kbkonlinetopup && python ${service}.py'
+ExecStart=/bin/bash -c 'source /home/bruceplxl/miniconda3/bin/activate kbkonlinetopup && python ${py_file}'
 Restart=always
 RestartSec=10
 StandardOutput=syslog
@@ -125,6 +154,7 @@ NoNewPrivileges=true
 [Install]
 WantedBy=multi-user.target
 EOF
+                fi
                 echo "已创建 ${service}.service 模板文件"
             fi
         fi

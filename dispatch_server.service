@@ -1,0 +1,22 @@
+[Unit]
+Description=Streamlit 任务调度器服务
+After=network.target
+
+[Service]
+Type=simple
+User=bruceplxl
+WorkingDirectory=/home/bruceplxl/deploy/kbkonlinetopup
+ExecStart=/bin/bash -c 'source /home/bruceplxl/miniconda3/bin/activate kbkonlinetopup && streamlit run dispatch_server.py --server.port=8501 --server.headless=true'
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+
+# Streamlit 专用配置
+Environment="LC_ALL=C.UTF-8"
+Environment="LANG=C.UTF-8"
+
+[Install]
+WantedBy=multi-user.target
