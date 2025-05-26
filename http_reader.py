@@ -26,6 +26,12 @@ dinner = (time_obj(16, 00), time_obj(23, 40))   # 16:55-19:40
 # 全局服务器套接字引用（用于优雅关闭）
 tcp_server_socket = None
 
+# 日刷卡计数相关全局变量
+daily_swipe_counts = {}  # key: jihao, value: count
+last_reset_day = None    # Stores datetime.date of last reset
+count_reset_lock = threading.Lock() # Lock for daily_swipe_counts and last_reset_day
+
+
 # 设置日志系统
 def setup_logging():
     """设置日志系统"""
@@ -194,15 +200,30 @@ def get_local_timestamp():
     """获取本地时区的时间戳字符串"""
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+def reset_daily_counts_if_needed():
+    """检查并重置每日刷卡计数（凌晨5点）"""
+    global daily_swipe_counts, last_reset_day
+    with count_reset_lock:
+        now = datetime.datetime.now()
+        today = now.date()
+        five_am = time_obj(5, 0)
+
+        if (last_reset_day is None or last_reset_day != today) and now.time() >= five_am:
+            logger.info(f"[COUNT] Performing daily swipe count reset. Previous reset day: {last_reset_day}, Current time: {now.strftime('%Y-%m-%d %H:%M:%S')}")
+            daily_swipe_counts.clear()
+            last_reset_day = today
+            logger.info(f"[COUNT] Daily swipe counts have been reset for {today}. Counts: {daily_swipe_counts}")
+        elif last_reset_day is not None and last_reset_day != today and now.time() < five_am:
+            logger.info(f"[COUNT] New day ({today}), but before 05:00. Counts from {last_reset_day} are still active.")
+
 def process_card(card, jihao, info, dn=None):
     """处理刷卡业务逻辑"""
+    reset_daily_counts_if_needed() # 在处理卡片前检查是否需要重置计数
     conn = None
     try:
         logger.info(f"[BUSINESS] 开始处理刷卡: card={card}, jihao={jihao}, info={info}, dn={dn}")
-        # 构造基本响应
         response_base = f"Response=1,{info}"
         
-        # 检查当前时间是否在允许的时间段内
         current_time = datetime.datetime.now()
         logger.info(f"[TIME] 当前时间: {current_time.strftime('%H:%M:%S')}")
         if not is_time_within_allowed_periods(current_time):
@@ -317,10 +338,27 @@ def process_card(card, jihao, info, dn=None):
         conn.commit()
         logger.info("[DB] 刷卡业务处理成功并已提交更改")
         
+        now = datetime.datetime.now() # Get current time again for count logic
+        jihao_specific_count_for_display = 0
+
+        with count_reset_lock: # Lock for reading and potential writing daily_swipe_counts
+            if now.time() >= time_obj(5,0):
+                # Increment count for successful swipe at/after 5 AM on the current reset cycle
+                count_for_jihao = daily_swipe_counts.get(jihao, 0)
+                count_for_jihao += 1
+                daily_swipe_counts[jihao] = count_for_jihao
+                jihao_specific_count_for_display = count_for_jihao
+                logger.info(f"[COUNT] Successful swipe for jihao {jihao} at {now.strftime('%H:%M:%S')} (>=05:00). Incremented count for today: {jihao_specific_count_for_display}")
+            else:
+                # Successful swipe but before 5 AM, display count from previous cycle (not incremented now)
+                jihao_specific_count_for_display = daily_swipe_counts.get(jihao, 0)
+                logger.info(f"[COUNT] Successful swipe for jihao {jihao} at {now.strftime('%H:%M:%S')} (<05:00). Displaying count from current cycle (not incremented): {jihao_specific_count_for_display}")
+        
         logger.info(f"[BUSINESS] Card processed successfully: {card}, User: {user}, Jihao: {jihao}")
         
         # 构造成功响应
-        display_text = GetChineseCode("{成功}") + user + " " + department
+        display_text_content = f"{{成功}}{user} {department} 第{jihao_specific_count_for_display}次"
+        display_text = GetChineseCode(display_text_content)
         voice_text = GetChineseCode("[v8]刷卡成功")
         
         return f"{response_base},{display_text},10,2,{voice_text},0,0"
@@ -335,18 +373,18 @@ def process_card(card, jihao, info, dn=None):
             except Exception as rollback_error:
                 logger.error(f"[DB] 回滚事务失败: {rollback_error}")
         logger.error(f"[BUSINESS] Database error: {e}")
-        display_text = GetChineseCode("{错误}系统异常")
+        display_text = GetChineseCode("{错误}系统异常DB")
         return f"{response_base},{display_text},10,0,,0,0"
         
     except Exception as e:
-        logger.error(f"[BUSINESS] 处理刷卡时发生未知错误: {e}")
+        logger.error(f"[BUSINESS] 处理刷卡时发生未知错误: {e}", exc_info=True)
         if conn:
             try:
                 conn.rollback()
                 logger.info("[DB] 事务已回滚")
             except Exception as rollback_error:
                 logger.error(f"[DB] 回滚事务失败: {rollback_error}")
-        display_text = GetChineseCode("{错误}系统异常")
+        display_text = GetChineseCode("{错误}系统异常过程")
         return f"{response_base},{display_text},10,0,,0,0"
         
     finally:

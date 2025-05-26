@@ -362,9 +362,268 @@ else:
     for i, job_info in enumerate(st.session_state.scheduled_jobs_info):
         cols = st.columns([0.1, 0.6, 0.2, 0.1])
         cols[0].write(f"#{i+1}")
-        cols[1].write(f"**任务**: {job_info['description']}\n**计划**: {job_info['schedule']}")
+        cols[1].write(f"**任务**: {job_info['description']}\\n**计划**: {job_info['schedule']}")
         if cols[3].button("删除", key=f"del_job_{job_info['id']}"):
             schedule.clear(job_info['id'])
             st.session_state.scheduled_jobs_info = [j for j in st.session_state.scheduled_jobs_info if j['id'] != job_info['id']]
             save_scheduled_jobs()
             st.rerun()
+
+st.divider()
+
+# --- Database Record Management Section ---
+st.header("数据库记录管理")
+
+# --- Database Management Functions ---
+def get_all_records(filter_user=None, filter_department=None):
+    conn = get_db_connection()
+    try:
+        query = f"SELECT rowid, user, department, card, status, last_updated FROM {TABLE_NAME}"
+        conditions = []
+        params = []
+        if filter_user:
+            conditions.append("user LIKE ?")
+            params.append(f"%{filter_user}%")
+        if filter_department and filter_department != "(所有部门)":
+            conditions.append("department = ?")
+            params.append(filter_department)
+        
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY user"
+        df = pd.read_sql_query(query, conn, params=params if params else None)
+        return df
+    except Exception as e:
+        st.error(f"查询记录时出错: {e}")
+        return pd.DataFrame()
+    finally:
+        conn.close()
+
+def add_record(user, department, card, status):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Check if user already exists
+        cursor.execute(f"SELECT 1 FROM {TABLE_NAME} WHERE user = ?", (user,))
+        if cursor.fetchone():
+            st.error(f"用户 '{user}' 已存在。无法添加重复用户。")
+            return False
+        
+        utc_plus_10_time = datetime.now(timezone(timedelta(hours=10))).strftime('%Y-%m-%d %H:%M:%S')
+        sql = f"INSERT INTO {TABLE_NAME} (user, department, card, status, last_updated) VALUES (?, ?, ?, ?, ?)"
+        cursor.execute(sql, (user, department, card, status, utc_plus_10_time))
+        conn.commit()
+        st.success(f"成功添加记录: 用户='{user}', 部门='{department}', 卡号='{card}', 状态='{status}'")
+        return True
+    except Exception as e:
+        st.error(f"添加记录时出错: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def get_record_by_rowid(rowid):
+    conn = get_db_connection()
+    try:
+        record = pd.read_sql_query(f"SELECT rowid, user, department, card, status FROM {TABLE_NAME} WHERE rowid = ?", conn, params=(rowid,))
+        return record.iloc[0] if not record.empty else None
+    except Exception as e:
+        st.error(f"获取记录详情时出错: {e}")
+        return None
+    finally:
+        conn.close()
+
+def update_record_by_rowid(rowid, user, department, card, status):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        # Check if new username already exists (if changed) for a different rowid
+        cursor.execute(f"SELECT 1 FROM {TABLE_NAME} WHERE user = ? AND rowid != ?", (user, rowid))
+        if cursor.fetchone():
+            st.error(f"用户名 '{user}' 已被其他记录使用。请选择其他用户名。")
+            return False
+
+        utc_plus_10_time = datetime.now(timezone(timedelta(hours=10))).strftime('%Y-%m-%d %H:%M:%S')
+        sql = f"UPDATE {TABLE_NAME} SET user = ?, department = ?, card = ?, status = ?, last_updated = ? WHERE rowid = ?"
+        cursor.execute(sql, (user, department, card, status, utc_plus_10_time, rowid))
+        conn.commit()
+        st.success(f"成功更新记录 (ID: {rowid}): 用户='{user}', 部门='{department}', 卡号='{card}', 状态='{status}'")
+        return True
+    except Exception as e:
+        st.error(f"更新记录时出错: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def delete_record_by_rowid(rowid):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        sql = f"DELETE FROM {TABLE_NAME} WHERE rowid = ?"
+        cursor.execute(sql, (rowid,))
+        conn.commit()
+        st.success(f"成功删除记录 (ID: {rowid})")
+        return True
+    except Exception as e:
+        st.error(f"删除记录时出错: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+# --- UI for Database Record Management ---
+
+# Tab layout for CRUD operations
+tab1, tab2, tab3 = st.tabs(["🔍 查看和修改/删除记录", "➕ 新增记录", "✏️ (旧)修改记录(按用户搜索)"])
+
+with tab1:
+    st.subheader("查看、修改或删除记录")
+    
+    view_col1, view_col2 = st.columns(2)
+    with view_col1:
+        filter_user_view = st.text_input("按用户筛选:", key="filter_user_view", placeholder="输入用户名关键字...")
+    with view_col2:
+        departments_for_filter = get_departments(include_all=True)
+        filter_department_view = st.selectbox("按部门筛选:", departments_for_filter, key="filter_dept_view")
+
+    if st.button("刷新数据", key="refresh_data_view"):
+        st.session_state.records_df = get_all_records(filter_user_view, filter_department_view)
+    
+    if 'records_df' not in st.session_state:
+        st.session_state.records_df = get_all_records(filter_user_view, filter_department_view)
+
+    if not st.session_state.records_df.empty:
+        st.info(f"找到 {len(st.session_state.records_df)} 条记录。")
+        
+        # Store editable state for each row
+        if 'edit_states' not in st.session_state:
+            st.session_state.edit_states = {}
+
+        for index, row in st.session_state.records_df.iterrows():
+            row_id = row['id']
+            is_editing = st.session_state.edit_states.get(row_id, False)
+            
+            item_cols = st.columns([0.6, 0.1, 0.1, 0.1, 0.1]) # Adjust column widths as needed
+            
+            with item_cols[0]: # Display area
+                if is_editing:
+                    st.session_state[f"user_edit_{row_id}"] = st.text_input("用户", value=row['user'], key=f"user_edit_input_{row_id}")
+                    st.session_state[f"dept_edit_{row_id}"] = st.text_input("部门", value=row['department'], key=f"dept_edit_input_{row_id}")
+                    st.session_state[f"card_edit_{row_id}"] = st.text_input("卡号", value=row['card'], key=f"card_edit_input_{row_id}")
+                    st.session_state[f"status_edit_{row_id}"] = st.selectbox("状态", options=[0, 1], index=int(row['status']), key=f"status_edit_input_{row_id}")
+                else:
+                    st.markdown(f"""
+                    **用户:** {row['user']} | **部门:** {row['department']} | **卡号:** {row['card']} | **状态:** {row['status']}
+                    <small>(上次更新: {row['last_updated']})</small>
+                    """, unsafe_allow_html=True)
+
+            with item_cols[1]: # Edit/Save button
+                if is_editing:
+                    if st.button("保存", key=f"save_{row_id}"):
+                        updated_user = st.session_state[f"user_edit_{row_id}"]
+                        updated_dept = st.session_state[f"dept_edit_{row_id}"]
+                        updated_card = st.session_state[f"card_edit_{row_id}"]
+                        updated_status = st.session_state[f"status_edit_{row_id}"]
+                        if update_record_by_rowid(row_id, updated_user, updated_dept, updated_card, updated_status):
+                            st.session_state.edit_states[row_id] = False
+                            st.session_state.records_df = get_all_records(filter_user_view, filter_department_view) # Refresh data
+                            st.rerun()
+                else:
+                    if st.button("修改", key=f"edit_{row_id}"):
+                        st.session_state.edit_states = {k: False for k in st.session_state.edit_states} # Close other edit modes
+                        st.session_state.edit_states[row_id] = True
+                        st.rerun()
+            
+            with item_cols[2]: # Cancel button (only in edit mode)
+                if is_editing:
+                    if st.button("取消", key=f"cancel_{row_id}"):
+                        st.session_state.edit_states[row_id] = False
+                        st.rerun()
+            
+            with item_cols[3]: # Delete button (only in non-edit mode for safety)
+                 if not is_editing:
+                    if st.button("删除", key=f"delete_{row_id}"):
+                        # Add confirmation for delete
+                        if 'confirm_delete_id' not in st.session_state:
+                            st.session_state.confirm_delete_id = None
+                        st.session_state.confirm_delete_id = row_id
+                        # st.rerun() # Rerun to show confirmation
+
+            if not is_editing and st.session_state.get('confirm_delete_id') == row_id:
+                 with item_cols[4]:
+                    st.warning(f"确定删除用户 {row['user']}?")
+                    if st.button("确认删除", key=f"confirm_delete_btn_{row_id}", type="primary"):
+                        if delete_record_by_rowid(row_id):
+                            st.session_state.records_df = get_all_records(filter_user_view, filter_department_view) # Refresh
+                            st.session_state.confirm_delete_id = None
+                            st.rerun()
+                    if st.button("取消删除", key=f"cancel_delete_btn_{row_id}"):
+                        st.session_state.confirm_delete_id = None
+                        st.rerun()
+            st.markdown("---")
+
+
+    else:
+        st.info("没有找到符合条件的记录，或数据库为空。")
+
+with tab2:
+    st.subheader("➕ 新增记录")
+    with st.form("add_record_form", clear_on_submit=True):
+        new_user = st.text_input("用户 (User):", placeholder="例如：张三")
+        new_department = st.text_input("部门 (Department):", placeholder="例如：技术部")
+        new_card = st.text_input("卡号 (Card):", placeholder="例如：1001")
+        new_status = st.selectbox("状态 (Status):", options=[0, 1], index=0, help="0 通常表示无效/离开, 1 表示有效/在岗")
+        submitted_add = st.form_submit_button("添加记录")
+
+        if submitted_add:
+            if not new_user:
+                st.warning("用户名不能为空。")
+            elif not new_department:
+                st.warning("部门不能为空。")
+            # card can be optional or have specific validation if needed
+            else:
+                if add_record(new_user, new_department, new_card, new_status):
+                    st.session_state.records_df = get_all_records() # Refresh data in view tab
+                    # Switch to view tab could be done with st.experimental_set_query_params, but simple refresh is fine
+                # Form clears on submit anyway
+
+with tab3: # This tab is kept for potential alternative edit flows, but the main one is in tab1
+    st.subheader("✏️ 修改记录 (通过搜索用户)")
+    st.warning('建议使用"查看和修改/删除记录"标签页中的行内编辑功能进行修改。')
+    
+    users_for_edit_list = get_users_by_department("(所有部门)") # Get all users
+    if not users_for_edit_list:
+        st.info("数据库中没有用户可供选择修改。")
+    else:
+        user_to_edit_search = st.text_input("搜索要修改的用户:", key="user_to_edit_search_alt")
+        
+        filtered_users_for_edit = [u for u in users_for_edit_list if user_to_edit_search.lower() in u.lower()] if user_to_edit_search else users_for_edit_list
+        
+        if not filtered_users_for_edit and user_to_edit_search:
+            st.info(f"未找到用户'{user_to_edit_search}'。")
+
+        if filtered_users_for_edit:
+            selected_user_for_edit_alt = st.selectbox(
+                "选择要修改的用户:", 
+                options=["(选择一个用户)"] + filtered_users_for_edit, 
+                key="user_select_edit_alt"
+            )
+
+            if selected_user_for_edit_alt and selected_user_for_edit_alt != "(选择一个用户)":
+                # Fetch current details using a function that gets a single user's full record.
+                # We need rowid to update, so let's make a function that gets record by user
+                # For simplicity, this alternative edit path is less developed than the in-line edit.
+                # conn = get_db_connection()
+                # current_record_df = pd.read_sql_query(f"SELECT rowid, user, department, card, status FROM {TABLE_NAME} WHERE user = ?", conn, params=(selected_user_for_edit_alt,))
+                # conn.close()
+
+                # This part would need a function like get_record_by_user_for_editing() that returns rowid as well.
+                # For now, this tab is more of a placeholder for an alternative edit flow.
+                # The primary edit mechanism is now inline in the "View" tab.
+                st.info(f"请在\"查看和修改/删除记录\"标签页中直接修改用户 {selected_user_for_edit_alt} 的信息。")
+
+
+# Ensure any session state for this section is initialized if needed
+if 'confirm_delete_id' not in st.session_state:
+    st.session_state.confirm_delete_id = None
