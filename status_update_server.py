@@ -118,9 +118,9 @@ class DutyUpdateService:
         if self.unique_excel_folder:
             # a时间点后2分钟的周一早餐任务
             a_time = datetime.strptime(self.time_points["a"], "%H:%M")
-            a_plus_2min = a_time + timedelta(minutes=1)
+            a_plus_2min = a_time + timedelta(minutes=2)
             c_time = datetime.strptime(self.time_points["c"], "%H:%M")
-            c_plus_2min = c_time + timedelta(minutes=1)
+            c_plus_2min = c_time + timedelta(minutes=2)
             
             # 周一早餐任务
             schedule.every().monday.at(a_plus_2min.strftime("%H:%M")).do(
@@ -191,8 +191,14 @@ class DutyUpdateService:
             if not excel_files:
                 return
             
-            # 按日期排序文件
-            excel_files.sort(key=lambda x: datetime.strptime(x.split('.')[0], '%Y-%m-%d'), reverse=True)
+            # 按日期排序文件（支持下划线格式）
+            def extract_date(filename):
+                date_part = filename.split('.')[0]
+                if '_' in date_part:
+                    date_part = date_part.split('_')[0]
+                return datetime.strptime(date_part, '%Y-%m-%d')
+            
+            excel_files.sort(key=extract_date, reverse=True)
             newest_file = excel_files[0]
             newest_file_path = os.path.join(self.excel_folder, newest_file)
             
@@ -250,8 +256,11 @@ class DutyUpdateService:
             logger.error(f"重新加载Excel文件时出错: {str(e)}")
     
     def _is_date_format(self, date_str):
-        """检查字符串是否为日期格式 YYYY-MM-DD"""
+        """检查字符串是否为日期格式 YYYY-MM-DD 或 YYYY-MM-DD_xxx"""
         try:
+            # 如果包含下划线，只取下划线前的部分作为日期
+            if '_' in date_str:
+                date_str = date_str.split('_')[0]
             datetime.strptime(date_str, '%Y-%m-%d')
             return True
         except ValueError:
@@ -592,8 +601,14 @@ class DutyUpdateService:
             if not excel_files:
                 return
             
-            # 按日期排序文件
-            excel_files.sort(key=lambda x: datetime.strptime(x.split('.')[0], '%Y-%m-%d'), reverse=True)
+            # 按日期排序文件（支持下划线格式）
+            def extract_date(filename):
+                date_part = filename.split('.')[0]
+                if '_' in date_part:
+                    date_part = date_part.split('_')[0]
+                return datetime.strptime(date_part, '%Y-%m-%d')
+            
+            excel_files.sort(key=extract_date, reverse=True)
             newest_file = excel_files[0]
             newest_file_path = os.path.join(self.unique_excel_folder, newest_file)
             
@@ -643,8 +658,36 @@ class DutyUpdateService:
             logger.error(f"重新加载餐饮Excel文件时出错: {str(e)}")
     
     def trigger_unique_update(self, meal_type):
-        """触发餐饮异步更新任务"""
-        logger.info(f"触发{meal_type}餐饮更新任务")
+        """触发餐饮异步更新任务，修正日期校验逻辑"""
+        from datetime import datetime, timedelta
+        import calendar
+        # 校验文件日期
+        if not self.latest_unique_excel:
+            logger.warning("无可用餐饮Excel文件，跳过任务")
+            return schedule.CancelJob
+        # 解析文件名日期
+        file_date_str = self.latest_unique_excel.split('.')[0]
+        if '_' in file_date_str:
+            file_date_str = file_date_str.split('_')[0]
+        try:
+            file_date = datetime.strptime(file_date_str, '%Y-%m-%d').date()
+        except Exception as e:
+            logger.warning(f"餐饮Excel文件名日期解析失败: {self.latest_unique_excel}, 跳过任务")
+            return schedule.CancelJob
+        # 获取今天日期
+        today = datetime.now().date()
+        # 校验逻辑
+        if meal_type == "breakfast":
+            # 只允许文件日期+1天等于今天（即本周一）
+            if file_date + timedelta(days=1) != today:
+                logger.warning(f"餐饮早餐任务校验失败，文件日期{file_date}+1天不等于今天{today}，跳过任务")
+                return schedule.CancelJob
+        elif meal_type == "dinner":
+            # 只允许文件日期-1天等于今天（即本周日）
+            if file_date - timedelta(days=1) != today:
+                logger.warning(f"餐饮晚餐任务校验失败，文件日期{file_date}-1天不等于今天{today}，跳过任务")
+                return schedule.CancelJob
+        logger.info(f"触发{meal_type}餐饮更新任务，文件日期校验通过")
         self.executor.submit(self.run_async_unique_update, meal_type)
         return schedule.CancelJob
         
@@ -799,32 +842,10 @@ if __name__ == "__main__":
         "type": "sqlite",
         "path": "./ic_manager.db"
     }
-    
-    # # MySQL 配置
-    # mysql_config = {
-    #     "type": "mysql",
-    #     "host": "localhost",
-    #     "port": 3306,
-    #     "user": "username",
-    #     "password": "password",
-    #     "database": "employees_db",
-    #     "charset": "utf8mb4",
-    #     "pool_size": 10
-    # }
-    
-    # # PostgreSQL 配置
-    # postgresql_config = {
-    #     "type": "postgresql",
-    #     "host": "localhost",
-    #     "port": 5432,
-    #     "user": "username",
-    #     "password": "password",
-    #     "database": "employees_db",
-    #     "pool_size": 10
-    # }
+
     
     # 选择要使用的数据库配置
-    db_config = sqlite_config  # 或 mysql_config 或 postgresql_config
+    db_config = sqlite_config 
     
     time_points = {
         "a": "05:25",
