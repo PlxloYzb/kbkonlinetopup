@@ -21,7 +21,7 @@ from datetime import time as time_obj
 # 定义允许刷卡的时间段
 breakfast = (time_obj(5, 25), time_obj(7, 40))  # 05:25-07:40
 lunch = (time_obj(10, 20), time_obj(12, 35))     # 11:20-12:35
-dinner = (time_obj(16, 00), time_obj(23, 40))   # 16:55-19:40
+dinner = (time_obj(16, 00), time_obj(23, 40))   # 16:00-23:40
 
 # 全局服务器套接字引用（用于优雅关闭）
 tcp_server_socket = None
@@ -47,7 +47,7 @@ def setup_logging():
     # 设置日志格式
     formatter = logging.Formatter(
         '%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S.%f'
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
     handler.setFormatter(formatter)
     
@@ -444,31 +444,64 @@ def service_client(new_socket, client_addr):
     
     try:
         # 设置套接字超时
-        new_socket.settimeout(30.0)
-        logger.debug(f"[NET] 已设置套接字超时: 30秒")
+        new_socket.settimeout(10.0)
+        logger.debug(f"[NET] 已设置套接字超时: 10秒")
         
         # 接收HTTP请求
         logger.debug(f"[NET] 开始接收数据从 {client_ip}:{client_port}")
         request_data = b""
         
         try:
+            # 设置较短的接收超时，避免长时间阻塞
+            new_socket.settimeout(5.0)
+            logger.debug(f"[NET] 调整接收超时为5秒: {client_ip}:{client_port}")
+            
             # 分块接收数据，避免数据不完整
-            while True:
-                chunk = new_socket.recv(1024)
-                if not chunk:
-                    break
-                request_data += chunk
-                # 检查是否接收完整的HTTP请求
-                if b'\r\n\r\n' in request_data:
-                    # 如果是POST请求，可能还有body数据
-                    if request_data.startswith(b'POST'):
-                        # 简单处理，再接收一次以确保body完整
-                        try:
-                            additional_data = new_socket.recv(1024)
-                            if additional_data:
-                                request_data += additional_data
-                        except socket.timeout:
-                            pass  # 超时是正常的，说明没有更多数据
+            max_recv_attempts = 3
+            recv_attempts = 0
+            
+            while recv_attempts < max_recv_attempts:
+                try:
+                    chunk = new_socket.recv(1024)
+                    if not chunk:
+                        logger.debug(f"[NET] 接收到空数据块，连接可能已关闭: {client_ip}:{client_port}")
+                        break
+                        
+                    request_data += chunk
+                    logger.debug(f"[NET] 接收数据块，大小: {len(chunk)}, 总大小: {len(request_data)}")
+                    
+                    # 检查是否接收完整的HTTP请求
+                    if b'\r\n\r\n' in request_data:
+                        logger.debug(f"[NET] 检测到完整HTTP头: {client_ip}:{client_port}")
+                        
+                        # 如果是POST请求，可能还有body数据
+                        if request_data.startswith(b'POST'):
+                            logger.debug(f"[NET] POST请求，尝试接收body数据: {client_ip}:{client_port}")
+                            try:
+                                # 设置更短的超时等待body数据
+                                new_socket.settimeout(1.0)
+                                additional_data = new_socket.recv(1024)
+                                if additional_data:
+                                    request_data += additional_data
+                                    logger.debug(f"[NET] 接收到额外body数据: {len(additional_data)}")
+                            except socket.timeout:
+                                logger.debug(f"[NET] body数据接收超时，可能没有更多数据: {client_ip}:{client_port}")
+                                pass  # 超时是正常的，说明没有更多数据
+                        break
+                        
+                    # 如果数据看起来像简单的GET请求（没有标准HTTP头结束符）
+                    elif (b'GET /' in request_data or b'POST /' in request_data) and len(request_data) > 50:
+                        logger.debug(f"[NET] 检测到简单HTTP请求: {client_ip}:{client_port}")
+                        break
+                        
+                except socket.timeout:
+                    recv_attempts += 1
+                    logger.warning(f"[NET] 接收数据超时，尝试次数: {recv_attempts}/{max_recv_attempts}: {client_ip}:{client_port}")
+                    if recv_attempts >= max_recv_attempts:
+                        break
+                    continue
+                except Exception as recv_error:
+                    logger.error(f"[NET] 接收数据时发生异常: {client_ip}:{client_port}, 错误: {recv_error}")
                     break
                     
         except socket.timeout:
@@ -494,6 +527,7 @@ def service_client(new_socket, client_addr):
                 return
         
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        logger.debug(f"[NET] 成功接收并解码请求: {client_ip}:{client_port}, 请求类型: {request[:10].strip()}")
         logger.info(f"[NET] Request received at {current_time} from {client_ip}:{client_port}")
         
         # 解析请求参数
@@ -535,14 +569,25 @@ def service_client(new_socket, client_addr):
                 pass
             return
         
-        # 发送响应
-        try:
-            logger.debug(f"[NET] 准备发送响应: {response_str}")
-            response_bytes = response_str.encode("gbk")
-            new_socket.send(response_bytes)
-            logger.info(f"[NET] 响应已发送到 {client_ip}:{client_port}, 长度: {len(response_bytes)}")
-        except Exception as e:
-            logger.error(f"[NET] 发送响应失败: {client_ip}:{client_port}, 错误: {e}")
+                    # 发送响应
+            try:
+                logger.debug(f"[NET] 准备发送响应: {response_str}")
+                response_bytes = response_str.encode("gbk")
+                
+                # 设置发送超时
+                new_socket.settimeout(5.0)
+                
+                # 发送数据
+                bytes_sent = new_socket.send(response_bytes)
+                logger.info(f"[NET] 响应已发送到 {client_ip}:{client_port}, 长度: {len(response_bytes)}, 实际发送: {bytes_sent}")
+                
+                # 确认所有数据都已发送
+                if bytes_sent < len(response_bytes):
+                    logger.warning(f"[NET] 响应数据未完全发送: {client_ip}:{client_port}, 已发送: {bytes_sent}/{len(response_bytes)}")
+            except socket.timeout:
+                logger.error(f"[NET] 发送响应超时: {client_ip}:{client_port}")
+            except Exception as e:
+                logger.error(f"[NET] 发送响应失败: {client_ip}:{client_port}, 错误: {e}")
         
         # 关闭连接
         try:
@@ -687,6 +732,10 @@ def main():
         server_host = "0.0.0.0"
         server_port = 9024
         
+        # 设置服务器套接字超时，避免accept阻塞太久
+        tcp_server_socket.settimeout(60.0)
+        logger.info(f"[NET] 设置服务器套接字超时: 60秒")
+        
         logger.info(f"[NET] 绑定地址: {server_host}:{server_port}")
         tcp_server_socket.bind((server_host, server_port))
         logger.info(f"[NET] 端口绑定成功: {server_port}")
@@ -712,8 +761,12 @@ def main():
             try:
                 logger.debug("[NET] 等待新连接...")
                 # 接受新连接
-                new_socket, client_addr = tcp_server_socket.accept()
-                logger.info(f"[NET] 新连接已建立: {client_addr[0]}:{client_addr[1]}")
+                try:
+                    new_socket, client_addr = tcp_server_socket.accept()
+                    logger.info(f"[NET] 新连接已建立: {client_addr[0]}:{client_addr[1]}")
+                except socket.timeout:
+                    logger.debug("[NET] accept超时，继续监听...")
+                    continue
                 
                 # 创建新线程处理连接
                 thread_name = f"Client-{client_addr[0]}:{client_addr[1]}"
