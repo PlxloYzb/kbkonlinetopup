@@ -17,7 +17,7 @@ from datetime import time as time_obj
 # 定义允许刷卡的时间段
 breakfast = (time_obj(5, 25), time_obj(7, 40))  # 05:25-07:40
 lunch = (time_obj(10, 20), time_obj(12, 35))     # 11:20-12:35
-dinner = (time_obj(16, 55), time_obj(19, 40))   # 16:55-19:40
+dinner = (time_obj(16, 00), time_obj(19, 40))   # 16:55-19:40
 
 
 # 设置日志系统
