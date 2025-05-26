@@ -2,6 +2,7 @@
 """
 IC卡刷卡管理系统服务器
 基于HTTP协议与读卡器通信，使用SQLite数据库存储相关数据
+增强版本 - 针对Ubuntu Server环境优化网络处理
 """
 import socket
 import threading
@@ -9,6 +10,9 @@ import sqlite3
 import logging
 import time
 import datetime
+import signal
+import sys
+import errno
 from logging.handlers import RotatingFileHandler
 import os
 from datetime import time as time_obj
@@ -17,8 +21,10 @@ from datetime import time as time_obj
 # 定义允许刷卡的时间段
 breakfast = (time_obj(5, 25), time_obj(7, 40))  # 05:25-07:40
 lunch = (time_obj(10, 20), time_obj(12, 35))     # 11:20-12:35
-dinner = (time_obj(16, 00), time_obj(19, 40))   # 16:55-19:40
+dinner = (time_obj(16, 00), time_obj(23, 40))   # 16:55-19:40
 
+# 全局服务器套接字引用（用于优雅关闭）
+tcp_server_socket = None
 
 # 设置日志系统
 def setup_logging():
@@ -27,16 +33,20 @@ def setup_logging():
     logger = logging.getLogger('ic_manager')
     logger.setLevel(logging.INFO)
     
+    # 清除已有的处理器
+    logger.handlers.clear()
+    
     # 创建按大小轮转的日志文件处理器
     handler = RotatingFileHandler(
         'ic_manager.log',
         maxBytes=10*1024*1024,  # 10MB
-        backupCount=5
+        backupCount=5,
+        encoding='utf-8'
     )
     
     # 设置日志格式
     formatter = logging.Formatter(
-        '%(asctime)s - %(levelname)s - %(message)s',
+        '%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S.%f'
     )
     handler.setFormatter(formatter)
@@ -59,61 +69,88 @@ logger = setup_logging()
 
 # 创建线程锁，用于关键资源访问
 card_lock = threading.Lock()
+connection_count_lock = threading.Lock()
+active_connections = 0
+
+
+def signal_handler(signum, frame):
+    """信号处理器，用于优雅关闭服务器"""
+    global tcp_server_socket
+    logger.info(f"[SYS] 接收到信号 {signum}，准备关闭服务器")
+    if tcp_server_socket:
+        try:
+            tcp_server_socket.close()
+            logger.info("[SYS] 服务器套接字已关闭")
+        except Exception as e:
+            logger.error(f"[SYS] 关闭服务器套接字时出错: {e}")
+    logger.info("[SYS] 服务器正在退出...")
+    sys.exit(0)
 
 
 def init_database():
     """初始化数据库结构"""
     logger.info("[DB] 连接数据库: ic_manager.db")
-    conn = sqlite3.connect('ic_manager.db')
-    # 设置数据库连接以使用本地时区
-    conn.execute("PRAGMA timezone='localtime'")
-    cursor = conn.cursor()
-    
-    # 创建卡片管理表
-    logger.info("[DB] 创建表: kbk_ic_manager")
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS kbk_ic_manager (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user TEXT NOT NULL,
-        card TEXT NOT NULL UNIQUE,
-        department TEXT NOT NULL,
-        status INTEGER NOT NULL DEFAULT 0,
-        last_updated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )
-    ''')
-    
-    # 创建卡号索引
-    logger.info("[DB] 创建索引: idx_card ON kbk_ic_manager(card)")
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_card ON kbk_ic_manager(card)')
-    
-    # 创建计数表
-    for table in ['kbk_ic_en_count', 'kbk_ic_cn_count', 'kbk_ic_nm_count']:
-        logger.info(f"[DB] 创建表: {table}")
-        cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS {table} (
+    try:
+        conn = sqlite3.connect('ic_manager.db', timeout=30.0)
+        # 设置数据库连接以使用本地时区
+        conn.execute("PRAGMA timezone='localtime'")
+        # 设置WAL模式以提高并发性能
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        cursor = conn.cursor()
+        
+        # 创建卡片管理表
+        logger.info("[DB] 创建表: kbk_ic_manager")
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS kbk_ic_manager (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user TEXT NOT NULL,
+            card TEXT NOT NULL UNIQUE,
             department TEXT NOT NULL,
-            transaction_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            status INTEGER NOT NULL DEFAULT 0,
+            last_updated TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         ''')
-    
-    # 创建失败记录表
-    logger.info("[DB] 创建表: kbk_ic_failure_records")
-    cursor.execute('''
-    CREATE TABLE IF NOT EXISTS kbk_ic_failure_records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user TEXT,
-        department TEXT,
-        transaction_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        failure_type INTEGER NOT NULL
-    )
-    ''')
-    
-    conn.commit()
-    logger.info("[DB] 数据库初始化完成并已提交更改")
-    conn.close()
-    logger.info("Database initialized successfully")
+        
+        # 创建卡号索引
+        logger.info("[DB] 创建索引: idx_card ON kbk_ic_manager(card)")
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_card ON kbk_ic_manager(card)')
+        
+        # 创建计数表
+        for table in ['kbk_ic_en_count', 'kbk_ic_cn_count', 'kbk_ic_nm_count']:
+            logger.info(f"[DB] 创建表: {table}")
+            cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS {table} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user TEXT NOT NULL,
+                department TEXT NOT NULL,
+                transaction_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            ''')
+        
+        # 创建失败记录表
+        logger.info("[DB] 创建表: kbk_ic_failure_records")
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS kbk_ic_failure_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user TEXT,
+            department TEXT,
+            transaction_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            failure_type INTEGER NOT NULL
+        )
+        ''')
+        
+        conn.commit()
+        logger.info("[DB] 数据库初始化完成并已提交更改")
+        conn.close()
+        logger.info("[DB] Database initialized successfully")
+        
+    except sqlite3.Error as e:
+        logger.error(f"[DB] 数据库初始化失败: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"[DB] 初始化过程中发生未知错误: {e}")
+        raise
 
 
 def GetChineseCode(inputstr):
@@ -122,11 +159,15 @@ def GetChineseCode(inputstr):
     hexcode = ""
     for num in range(0, strlen):
         str_char = inputstr[num:num+1]
-        sdata = bytes(str_char, encoding='gbk')  # 将信息转为bytes
-        if len(sdata) == 1:
-            hexcode = hexcode + str_char
-        else:
-            hexcode = hexcode + "\\x" + '%02X' % (sdata[0]) + '%02X' % (sdata[1])
+        try:
+            sdata = bytes(str_char, encoding='gbk')  # 将信息转为bytes
+            if len(sdata) == 1:
+                hexcode = hexcode + str_char
+            else:
+                hexcode = hexcode + "\\x" + '%02X' % (sdata[0]) + '%02X' % (sdata[1])
+        except UnicodeEncodeError as e:
+            logger.warning(f"[ENCODE] 字符编码失败: {str_char}, 错误: {e}")
+            hexcode = hexcode + str_char  # 如果编码失败，保持原字符
     return hexcode
 
 
@@ -157,16 +198,18 @@ def process_card(card, jihao, info, dn=None):
     """处理刷卡业务逻辑"""
     conn = None
     try:
-        logger.info(f"[DB] 开始处理刷卡: card={card}, jihao={jihao}, info={info}, dn={dn}")
+        logger.info(f"[BUSINESS] 开始处理刷卡: card={card}, jihao={jihao}, info={info}, dn={dn}")
         # 构造基本响应
         response_base = f"Response=1,{info}"
         
         # 检查当前时间是否在允许的时间段内
         current_time = datetime.datetime.now()
+        logger.info(f"[TIME] 当前时间: {current_time.strftime('%H:%M:%S')}")
         if not is_time_within_allowed_periods(current_time):
             # 记录时间段错误
+            logger.warning(f"[TIME] 不在允许的用餐时间段内: {current_time.strftime('%H:%M:%S')}")
             logger.info("[DB] 连接数据库: ic_manager.db")
-            conn = sqlite3.connect('ic_manager.db')
+            conn = sqlite3.connect('ic_manager.db', timeout=30.0)
             conn.execute("PRAGMA busy_timeout = 5000")  # 5秒超时
             cursor = conn.cursor()
             # 查询用户信息（如果卡存在）
@@ -188,13 +231,14 @@ def process_card(card, jihao, info, dn=None):
                 )
             conn.commit()
             logger.info("[DB] 已提交失败记录（时间段错误）")
-            logger.warning(f"Card swiped outside allowed time periods: {card}")
+            logger.warning(f"[BUSINESS] Card swiped outside allowed time periods: {card}")
             # 构造失败响应
             display_text = GetChineseCode("{错误}不在允许的用餐时间")
             return f"{response_base},{display_text},10,0,,0,0"
+            
         # 连接数据库
-        logger.info("[DB] 连接数据库: ic_manager.db")
-        conn = sqlite3.connect('ic_manager.db')
+        logger.info("[DB] 连接数据库进行卡片验证: ic_manager.db")
+        conn = sqlite3.connect('ic_manager.db', timeout=30.0)
         # 设置超时
         conn.execute("PRAGMA busy_timeout = 5000")  # 5秒超时
         conn.row_factory = sqlite3.Row
@@ -210,7 +254,7 @@ def process_card(card, jihao, info, dn=None):
         
         # 如果卡号不存在
         if not card_info:
-            logger.info(f"[DB] 卡号不存在，插入失败记录: failure_type=2")
+            logger.warning(f"[DB] 卡号不存在: {card}")
             # 记录失败信息
             cursor.execute(
                 'INSERT INTO kbk_ic_failure_records (failure_type, transaction_date) VALUES (?, ?)',
@@ -218,7 +262,7 @@ def process_card(card, jihao, info, dn=None):
             )
             conn.commit()
             logger.info("[DB] 已提交失败记录（卡号不存在）")
-            logger.warning(f"Card not found: {card}")
+            logger.warning(f"[BUSINESS] Card not found: {card}")
             
             # 构造失败响应
             display_text = GetChineseCode("{错误}卡号不存在")
@@ -228,10 +272,11 @@ def process_card(card, jihao, info, dn=None):
         user = card_info['user']
         department = card_info['department']
         status = card_info['status']
+        logger.info(f"[DB] 卡片信息: user={user}, department={department}, status={status}")
         
         # 如果卡片未激活
         if status != 1:
-            logger.info(f"[DB] 卡片未激活，插入失败记录: user={user}, department={department}, failure_type=1")
+            logger.warning(f"[DB] 卡片未激活: card={card}, status={status}")
             # 记录失败信息
             cursor.execute(
                 'INSERT INTO kbk_ic_failure_records (user, department, failure_type, transaction_date) VALUES (?, ?, ?, ?)',
@@ -239,7 +284,7 @@ def process_card(card, jihao, info, dn=None):
             )
             conn.commit()
             logger.info("[DB] 已提交失败记录（卡片未激活）")
-            logger.warning(f"Card inactive: {card}, User: {user}")
+            logger.warning(f"[BUSINESS] Card inactive: {card}, User: {user}")
             
             # 构造失败响应
             display_text = GetChineseCode("{失败}卡片未激活")
@@ -272,7 +317,7 @@ def process_card(card, jihao, info, dn=None):
         conn.commit()
         logger.info("[DB] 刷卡业务处理成功并已提交更改")
         
-        logger.info(f"Card processed successfully: {card}, User: {user}, Jihao: {jihao}")
+        logger.info(f"[BUSINESS] Card processed successfully: {card}, User: {user}, Jihao: {jihao}")
         
         # 构造成功响应
         display_text = GetChineseCode("{成功}") + user + " " + department
@@ -284,8 +329,23 @@ def process_card(card, jihao, info, dn=None):
         logger.error(f"[DB] 数据库异常: {e}")
         # 发生错误时回滚事务
         if conn:
-            conn.rollback()
-        logger.error(f"Database error: {e}")
+            try:
+                conn.rollback()
+                logger.info("[DB] 事务已回滚")
+            except Exception as rollback_error:
+                logger.error(f"[DB] 回滚事务失败: {rollback_error}")
+        logger.error(f"[BUSINESS] Database error: {e}")
+        display_text = GetChineseCode("{错误}系统异常")
+        return f"{response_base},{display_text},10,0,,0,0"
+        
+    except Exception as e:
+        logger.error(f"[BUSINESS] 处理刷卡时发生未知错误: {e}")
+        if conn:
+            try:
+                conn.rollback()
+                logger.info("[DB] 事务已回滚")
+            except Exception as rollback_error:
+                logger.error(f"[DB] 回滚事务失败: {rollback_error}")
         display_text = GetChineseCode("{错误}系统异常")
         return f"{response_base},{display_text},10,0,,0,0"
         
@@ -293,70 +353,157 @@ def process_card(card, jihao, info, dn=None):
         logger.info("[DB] 关闭数据库连接")
         # 关闭数据库连接
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except Exception as e:
+                logger.error(f"[DB] 关闭数据库连接失败: {e}")
 
 
 def process_heartbeat(info, dn):
     """处理心跳包"""
-    logger.debug(f"Heartbeat received from device: {dn}")
+    logger.debug(f"[HEARTBEAT] Heartbeat received from device: {dn}")
     return f"Response=1,{info},,0,0,,"
 
 
 def parse_request(request):
     """解析HTTP请求获取参数"""
-    request_header_lines = request.splitlines()
-    requestlines = len(request_header_lines)
-    
-    # 解析GET请求
-    if request.startswith("GET"):
-        try:
-            start_idx = request_header_lines[0].find("?") + 1
-            end_idx = request_header_lines[0].find("HTTP/1.1") - 1
-            if start_idx > 0 and end_idx > start_idx:
-                CommitParameter = request_header_lines[0][start_idx:end_idx]
-            else:
-                return {}
-        except:
-            return {}
-    # 解析POST请求
-    elif request.startswith("POST"):
-        try:
-            CommitParameter = request_header_lines[requestlines-1]
-            # 处理JSON格式
-            if "Content-Type: application/json" in request:
-                CommitParameter = CommitParameter.replace("{", "")
-                CommitParameter = CommitParameter.replace("\"", "")
-                CommitParameter = CommitParameter.replace(":", "=")
-                CommitParameter = CommitParameter.replace(",", "&")
-                CommitParameter = CommitParameter.replace("}", "")
-        except:
-            return {}
-    else:
-        return {}
-    
-    # 解析参数
-    params = {}
-    FieldsList = CommitParameter.split('&')
-    for field in FieldsList:
-        if '=' in field:
-            key, value = field.split('=', 1)
-            params[key.strip()] = value.strip()
-    
-    return params
-
-
-def service_client(new_socket):
-    """处理客户端连接"""
     try:
+        logger.debug(f"[PARSE] 开始解析请求，请求长度: {len(request)}")
+        request_header_lines = request.splitlines()
+        requestlines = len(request_header_lines)
+        logger.debug(f"[PARSE] 请求行数: {requestlines}")
+        
+        # 解析GET请求
+        if request.startswith("GET"):
+            logger.debug("[PARSE] 处理GET请求")
+            try:
+                start_idx = request_header_lines[0].find("?") + 1
+                end_idx = request_header_lines[0].find("HTTP/1.1") - 1
+                if start_idx > 0 and end_idx > start_idx:
+                    CommitParameter = request_header_lines[0][start_idx:end_idx]
+                    logger.debug(f"[PARSE] GET参数: {CommitParameter}")
+                else:
+                    logger.warning("[PARSE] GET请求无参数")
+                    return {}
+            except Exception as e:
+                logger.error(f"[PARSE] 解析GET请求失败: {e}")
+                return {}
+                
+        # 解析POST请求
+        elif request.startswith("POST"):
+            logger.debug("[PARSE] 处理POST请求")
+            try:
+                CommitParameter = request_header_lines[requestlines-1]
+                logger.debug(f"[PARSE] POST原始参数: {CommitParameter}")
+                # 处理JSON格式
+                if "Content-Type: application/json" in request:
+                    logger.debug("[PARSE] 检测到JSON格式，进行转换")
+                    CommitParameter = CommitParameter.replace("{", "")
+                    CommitParameter = CommitParameter.replace("\"", "")
+                    CommitParameter = CommitParameter.replace(":", "=")
+                    CommitParameter = CommitParameter.replace(",", "&")
+                    CommitParameter = CommitParameter.replace("}", "")
+                    logger.debug(f"[PARSE] JSON转换后参数: {CommitParameter}")
+            except Exception as e:
+                logger.error(f"[PARSE] 解析POST请求失败: {e}")
+                return {}
+        else:
+            logger.warning(f"[PARSE] 未知请求类型: {request[:20]}")
+            return {}
+        
+        # 解析参数
+        params = {}
+        FieldsList = CommitParameter.split('&')
+        logger.debug(f"[PARSE] 参数字段列表: {FieldsList}")
+        for field in FieldsList:
+            if '=' in field:
+                key, value = field.split('=', 1)
+                params[key.strip()] = value.strip()
+        
+        logger.debug(f"[PARSE] 解析完成，参数: {params}")
+        return params
+        
+    except Exception as e:
+        logger.error(f"[PARSE] 解析请求时发生异常: {e}")
+        return {}
+
+
+def update_connection_count(delta):
+    """更新活跃连接数"""
+    global active_connections
+    with connection_count_lock:
+        active_connections += delta
+        logger.info(f"[NET] 活跃连接数: {active_connections}")
+
+
+def service_client(new_socket, client_addr):
+    """处理客户端连接"""
+    client_ip, client_port = client_addr
+    logger.info(f"[NET] 开始处理客户端连接: {client_ip}:{client_port}")
+    update_connection_count(1)
+    
+    try:
+        # 设置套接字超时
+        new_socket.settimeout(30.0)
+        logger.debug(f"[NET] 已设置套接字超时: 30秒")
+        
         # 接收HTTP请求
-        request = new_socket.recv(1024).decode('utf-8')
+        logger.debug(f"[NET] 开始接收数据从 {client_ip}:{client_port}")
+        request_data = b""
+        
+        try:
+            # 分块接收数据，避免数据不完整
+            while True:
+                chunk = new_socket.recv(1024)
+                if not chunk:
+                    break
+                request_data += chunk
+                # 检查是否接收完整的HTTP请求
+                if b'\r\n\r\n' in request_data:
+                    # 如果是POST请求，可能还有body数据
+                    if request_data.startswith(b'POST'):
+                        # 简单处理，再接收一次以确保body完整
+                        try:
+                            additional_data = new_socket.recv(1024)
+                            if additional_data:
+                                request_data += additional_data
+                        except socket.timeout:
+                            pass  # 超时是正常的，说明没有更多数据
+                    break
+                    
+        except socket.timeout:
+            logger.warning(f"[NET] 接收数据超时: {client_ip}:{client_port}")
+            return
+        except Exception as e:
+            logger.error(f"[NET] 接收数据失败: {client_ip}:{client_port}, 错误: {e}")
+            return
+            
+        if not request_data:
+            logger.warning(f"[NET] 未接收到数据: {client_ip}:{client_port}")
+            return
+            
+        try:
+            request = request_data.decode('utf-8')
+            logger.debug(f"[NET] 成功解码请求数据，长度: {len(request)}")
+        except UnicodeDecodeError:
+            try:
+                request = request_data.decode('gbk')
+                logger.debug(f"[NET] 使用GBK编码解码请求数据，长度: {len(request)}")
+            except UnicodeDecodeError as e:
+                logger.error(f"[NET] 无法解码请求数据: {client_ip}:{client_port}, 错误: {e}")
+                return
+        
         current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        logger.debug(f"Request received at {current_time}")
+        logger.info(f"[NET] Request received at {current_time} from {client_ip}:{client_port}")
         
         # 解析请求参数
         params = parse_request(request)
         if not params:
-            new_socket.close()
+            logger.warning(f"[NET] 无法解析请求参数: {client_ip}:{client_port}")
+            try:
+                new_socket.close()
+            except:
+                pass
             return
         
         # 提取关键参数
@@ -366,32 +513,53 @@ def service_client(new_socket):
         card = params.get('card', '')
         jihao = params.get('jihao', '')
         
+        logger.info(f"[NET] 解析到参数: info={info}, dn={dn}, heartbeattype={heartbeattype}, card={card}, jihao={jihao}")
+        
+        response_str = ""
+        
         # 处理心跳包
         if heartbeattype == "1" and len(dn) == 16 and len(info) > 0:
-            ResponseStr = process_heartbeat(info, dn)
-            new_socket.send(ResponseStr.encode("gbk"))
-            logger.debug(f"Heartbeat response sent: {ResponseStr}")
-            new_socket.close()
-            return
-        
+            logger.info(f"[NET] 处理心跳包: device={dn}")
+            response_str = process_heartbeat(info, dn)
+            
         # 处理刷卡
-        if len(dn) == 16 and len(card) > 4 and len(info) > 0:
-            ResponseStr = process_card(card, jihao, info, dn)
-            new_socket.send(ResponseStr.encode("gbk"))
-            logger.debug(f"Card response sent: {ResponseStr}")
-            new_socket.close()
+        elif len(dn) == 16 and len(card) > 4 and len(info) > 0:
+            logger.info(f"[NET] 处理刷卡请求: card={card}, device={dn}")
+            response_str = process_card(card, jihao, info, dn)
+            
+        else:
+            logger.warning(f"[NET] 未识别的请求类型: {params}")
+            try:
+                new_socket.close()
+            except:
+                pass
             return
         
-        # 其他未知情况
-        new_socket.close()
-        logger.warning(f"Unknown request parameters: {params}")
+        # 发送响应
+        try:
+            logger.debug(f"[NET] 准备发送响应: {response_str}")
+            response_bytes = response_str.encode("gbk")
+            new_socket.send(response_bytes)
+            logger.info(f"[NET] 响应已发送到 {client_ip}:{client_port}, 长度: {len(response_bytes)}")
+        except Exception as e:
+            logger.error(f"[NET] 发送响应失败: {client_ip}:{client_port}, 错误: {e}")
+        
+        # 关闭连接
+        try:
+            new_socket.close()
+            logger.debug(f"[NET] 连接已关闭: {client_ip}:{client_port}")
+        except Exception as e:
+            logger.error(f"[NET] 关闭连接失败: {client_ip}:{client_port}, 错误: {e}")
         
     except Exception as e:
-        logger.error(f"Error handling client: {e}")
+        logger.error(f"[NET] 处理客户端连接时发生异常: {client_ip}:{client_port}, 错误: {e}")
         try:
             new_socket.close()
         except:
             pass
+    finally:
+        update_connection_count(-1)
+        logger.info(f"[NET] 客户端连接处理完成: {client_ip}:{client_port}")
 
 
 def update_card_status(card, new_status):
@@ -399,8 +567,9 @@ def update_card_status(card, new_status):
     # 使用锁保护数据库操作
     with card_lock:
         logger.info(f"[DB] 更新卡片状态: card={card}, new_status={new_status}")
-        conn = sqlite3.connect('ic_manager.db')
+        conn = None
         try:
+            conn = sqlite3.connect('ic_manager.db', timeout=30.0)
             # 设置超时
             conn.execute("PRAGMA busy_timeout = 5000")  # 5秒超时
             # 设置数据库连接以使用本地时区
@@ -418,59 +587,176 @@ def update_card_status(card, new_status):
             return True
         except sqlite3.Error as e:
             logger.error(f"[DB] 数据库异常: {e}")
-            conn.rollback()
-            logger.error(f"Database error: {e}")
+            if conn:
+                try:
+                    conn.rollback()
+                    logger.info("[DB] 事务已回滚")
+                except:
+                    pass
+            logger.error(f"[DB] Database error: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"[DB] 更新卡片状态时发生未知错误: {e}")
+            if conn:
+                try:
+                    conn.rollback()
+                    logger.info("[DB] 事务已回滚")
+                except:
+                    pass
             return False
         finally:
             logger.info("[DB] 关闭数据库连接")
-            conn.close()
+            if conn:
+                try:
+                    conn.close()
+                except Exception as e:
+                    logger.error(f"[DB] 关闭数据库连接失败: {e}")
+
+
+def create_server_socket():
+    """创建并配置服务器套接字"""
+    logger.info("[NET] 创建TCP服务器套接字")
+    
+    try:
+        # 创建套接字
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        logger.info("[NET] TCP套接字创建成功")
+        
+        # 设置套接字选项
+        server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        logger.info("[NET] 已设置 SO_REUSEADDR")
+        
+        # 在Linux/Unix系统上设置 SO_REUSEPORT（如果支持）
+        try:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            logger.info("[NET] 已设置 SO_REUSEPORT")
+        except AttributeError:
+            logger.info("[NET] 系统不支持 SO_REUSEPORT，跳过")
+        except OSError as e:
+            logger.warning(f"[NET] 设置 SO_REUSEPORT 失败: {e}")
+        
+        # 设置TCP_NODELAY减少延迟
+        try:
+            server_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            logger.info("[NET] 已设置 TCP_NODELAY")
+        except Exception as e:
+            logger.warning(f"[NET] 设置 TCP_NODELAY 失败: {e}")
+        
+        # 设置发送和接收缓冲区大小
+        try:
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+            server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
+            logger.info("[NET] 已设置发送和接收缓冲区大小为64KB")
+        except Exception as e:
+            logger.warning(f"[NET] 设置缓冲区大小失败: {e}")
+        
+        return server_socket
+        
+    except Exception as e:
+        logger.error(f"[NET] 创建服务器套接字失败: {e}")
+        raise
 
 
 def main():
     """主函数，启动服务器"""
+    global tcp_server_socket
+    
+    # 注册信号处理器
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     logger.info("[SYS] 脚本启动，准备初始化数据库")
+    
     # 初始化数据库
     try:
         init_database()
         logger.info("[SYS] 数据库初始化完成")
     except Exception as e:
         logger.error(f"[SYS] 数据库初始化失败: {e}")
-        return
+        return 1
     
-    logger.info("[SYS] 创建TCP服务器套接字")
-    tcp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcp_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    # 创建服务器套接字
+    try:
+        tcp_server_socket = create_server_socket()
+    except Exception as e:
+        logger.error(f"[SYS] 创建服务器套接字失败: {e}")
+        return 1
     
     try:
-        logger.info("[SYS] 绑定端口9024，准备监听")
         # 绑定端口并监听
-        tcp_server_socket.bind(("0.0.0.0", 9024))  # 使用9024端口，与读卡器默认端口一致
-        tcp_server_socket.listen(128)
-        logger.info("[SYS] 服务器启动成功，监听端口9024，等待连接")
+        server_host = "0.0.0.0"
+        server_port = 9024
+        
+        logger.info(f"[NET] 绑定地址: {server_host}:{server_port}")
+        tcp_server_socket.bind((server_host, server_port))
+        logger.info(f"[NET] 端口绑定成功: {server_port}")
+        
+        # 开始监听，设置较大的backlog
+        backlog = 256
+        tcp_server_socket.listen(backlog)
+        logger.info(f"[NET] 服务器启动成功，监听端口{server_port}，backlog={backlog}")
+        
+        # 显示网络接口信息
+        try:
+            import socket as sock_module
+            hostname = sock_module.gethostname()
+            local_ip = sock_module.gethostbyname(hostname)
+            logger.info(f"[NET] 主机名: {hostname}, 本地IP: {local_ip}")
+        except Exception as e:
+            logger.warning(f"[NET] 无法获取本地IP信息: {e}")
+        
+        logger.info("[SYS] 服务器启动完成，等待连接...")
         
         # 主循环
         while True:
             try:
-                logger.info("[SYS] 等待新连接...")
+                logger.debug("[NET] 等待新连接...")
                 # 接受新连接
                 new_socket, client_addr = tcp_server_socket.accept()
-                logger.info(f"[SYS] 新连接来自 {client_addr}")
+                logger.info(f"[NET] 新连接已建立: {client_addr[0]}:{client_addr[1]}")
                 
                 # 创建新线程处理连接
-                t = threading.Thread(target=service_client, args=(new_socket,))
+                thread_name = f"Client-{client_addr[0]}:{client_addr[1]}"
+                t = threading.Thread(
+                    target=service_client, 
+                    args=(new_socket, client_addr),
+                    name=thread_name
+                )
+                t.daemon = True  # 设置为守护线程
                 t.start()
+                logger.debug(f"[NET] 已创建处理线程: {thread_name}")
+                
+            except OSError as e:
+                if e.errno == errno.EINTR:
+                    logger.info("[NET] 接收连接被信号中断")
+                    break
+                elif e.errno == errno.EBADF:
+                    logger.info("[NET] 套接字已关闭")
+                    break
+                else:
+                    logger.error(f"[NET] 接收连接时发生OSError: {e}")
             except Exception as e:
-                logger.error(f"[SYS] 接收连接异常: {e}")
+                logger.error(f"[NET] 接收连接异常: {e}")
+                time.sleep(1)  # 短暂延迟避免快速循环
     
     except KeyboardInterrupt:
         logger.info("[SYS] 检测到键盘中断，服务器即将停止")
     except Exception as e:
         logger.error(f"[SYS] 服务器启动或运行异常: {e}")
+        return 1
     finally:
         # 关闭服务器套接字
-        tcp_server_socket.close()
+        if tcp_server_socket:
+            try:
+                tcp_server_socket.close()
+                logger.info("[SYS] 服务器套接字已关闭")
+            except Exception as e:
+                logger.error(f"[SYS] 关闭服务器套接字失败: {e}")
+        
         logger.info("[SYS] 服务器已关闭")
+        return 0
 
 
 if __name__ == '__main__':
-    main()
+    exit_code = main()
+    sys.exit(exit_code)
