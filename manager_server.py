@@ -201,7 +201,7 @@ def get_counts():
     morning_end = time_obj(7, 40)
     noon_start = time_obj(11, 25)
     noon_end = time_obj(12, 40)
-    evening_start = time_obj(16, 00)
+    evening_start = time_obj(16, 55)
     evening_end = time_obj(19, 40)
 
     for table in table_names:
