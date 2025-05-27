@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=root
+User=bruceplxl
 WorkingDirectory=/home/bruceplxl/deploy/kbkonlinetopup
 ExecStart=/bin/bash -c 'source /home/bruceplxl/miniconda3/bin/activate kbkonlinetopup && python http_reader.py'
 Restart=always

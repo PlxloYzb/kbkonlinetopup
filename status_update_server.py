@@ -67,7 +67,7 @@ class UniqueExcelFileHandler(watchdog.events.FileSystemEventHandler):
                 self.service.reload_unique_excel()
 
 class DutyUpdateService:
-    def __init__(self, excel_folder, db_config, time_points, unique_excel_folder=None, cache_size=500, batch_size=100, max_workers=4, monitor_port=5551):
+    def __init__(self, excel_folder, db_config, time_points, unique_excel_folder=None, cache_size=500, batch_size=100, max_workers=4, monitor_port=5551, test_mode=False):
         """
         初始化服务
         excel_folder: Excel文件存储路径
@@ -78,6 +78,7 @@ class DutyUpdateService:
         batch_size: 批处理大小
         max_workers: 最大并发工作线程数
         monitor_port: prometheus监控端口，None表示不启动监控
+        test_mode: 测试模式，为True时跳过餐饮任务的日期校验
         """
         self.excel_folder = excel_folder
         self.unique_excel_folder = unique_excel_folder
@@ -91,6 +92,7 @@ class DutyUpdateService:
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.db_pool = None
         self.monitor_port = monitor_port
+        self.test_mode = False  # 测试模式
         # 健康状态
         self.health_status = {
             "status": "healthy",
@@ -191,11 +193,14 @@ class DutyUpdateService:
             if not excel_files:
                 return
             
-            # 按日期排序文件（支持下划线格式）
+            # 按日期排序文件（支持下划线和短横线格式）
             def extract_date(filename):
                 date_part = filename.split('.')[0]
                 if '_' in date_part:
                     date_part = date_part.split('_')[0]
+                elif date_part.count('-') > 2:
+                    parts = date_part.split('-')
+                    date_part = '-'.join(parts[:3])  # 取YYYY-MM-DD部分
                 return datetime.strptime(date_part, '%Y-%m-%d')
             
             excel_files.sort(key=extract_date, reverse=True)
@@ -256,11 +261,15 @@ class DutyUpdateService:
             logger.error(f"重新加载Excel文件时出错: {str(e)}")
     
     def _is_date_format(self, date_str):
-        """检查字符串是否为日期格式 YYYY-MM-DD 或 YYYY-MM-DD_xxx"""
+        """检查字符串是否为日期格式 YYYY-MM-DD 或 YYYY-MM-DD_xxx 或 YYYY-MM-DD-xxx"""
         try:
             # 如果包含下划线，只取下划线前的部分作为日期
             if '_' in date_str:
                 date_str = date_str.split('_')[0]
+            # 如果包含多个短横线（超过日期格式的2个），只取前3个部分作为日期
+            elif date_str.count('-') > 2:
+                parts = date_str.split('-')
+                date_str = '-'.join(parts[:3])  # 取YYYY-MM-DD部分
             datetime.strptime(date_str, '%Y-%m-%d')
             return True
         except ValueError:
@@ -347,35 +356,6 @@ class DutyUpdateService:
             conn.row_factory = aiosqlite.Row
             return conn
         
-        # elif db_type == "mysql":
-        #     # MySQL连接
-        #     import aiomysql
-        #     pool = await aiomysql.create_pool(
-        #         host=self.db_config["host"],
-        #         port=self.db_config.get("port", 3306),
-        #         user=self.db_config["user"],
-        #         password=self.db_config["password"],
-        #         db=self.db_config["database"],
-        #         charset=self.db_config.get("charset", "utf8mb4"),
-        #         autocommit=False,
-        #         maxsize=self.db_config.get("pool_size", 10),
-        #         minsize=self.db_config.get("min_size", 1)
-        #     )
-        #     return pool
-            
-        # elif db_type == "postgresql":
-        #     # PostgreSQL连接
-        #     import asyncpg
-        #     pool = await asyncpg.create_pool(
-        #         host=self.db_config["host"],
-        #         port=self.db_config.get("port", 5432),
-        #         user=self.db_config["user"],
-        #         password=self.db_config["password"],
-        #         database=self.db_config["database"],
-        #         min_size=self.db_config.get("min_size", 1),
-        #         max_size=self.db_config.get("pool_size", 10)
-        #     )
-        #     return pool
         
         else:
             raise ValueError(f"不支持的数据库类型: {db_type}")
@@ -601,11 +581,14 @@ class DutyUpdateService:
             if not excel_files:
                 return
             
-            # 按日期排序文件（支持下划线格式）
+            # 按日期排序文件（支持下划线和短横线格式）
             def extract_date(filename):
                 date_part = filename.split('.')[0]
                 if '_' in date_part:
                     date_part = date_part.split('_')[0]
+                elif date_part.count('-') > 2:
+                    parts = date_part.split('-')
+                    date_part = '-'.join(parts[:3])  # 取YYYY-MM-DD部分
                 return datetime.strptime(date_part, '%Y-%m-%d')
             
             excel_files.sort(key=extract_date, reverse=True)
@@ -669,6 +652,9 @@ class DutyUpdateService:
         file_date_str = self.latest_unique_excel.split('.')[0]
         if '_' in file_date_str:
             file_date_str = file_date_str.split('_')[0]
+        elif file_date_str.count('-') > 2:
+            parts = file_date_str.split('-')
+            file_date_str = '-'.join(parts[:3])  # 取YYYY-MM-DD部分
         try:
             file_date = datetime.strptime(file_date_str, '%Y-%m-%d').date()
         except Exception as e:
@@ -676,20 +662,33 @@ class DutyUpdateService:
             return schedule.CancelJob
         # 获取今天日期
         today = datetime.now().date()
-        # 校验逻辑
-        if meal_type == "breakfast":
-            # 只允许文件日期+1天等于今天（即本周一）
-            if file_date + timedelta(days=1) != today:
-                logger.warning(f"餐饮早餐任务校验失败，文件日期{file_date}+1天不等于今天{today}，跳过任务")
-                return schedule.CancelJob
-        elif meal_type == "dinner":
-            # 只允许文件日期-1天等于今天（即本周日）
-            if file_date - timedelta(days=1) != today:
-                logger.warning(f"餐饮晚餐任务校验失败，文件日期{file_date}-1天不等于今天{today}，跳过任务")
-                return schedule.CancelJob
+        # 校验逻辑（测试模式下跳过校验）
+        if not self.test_mode:
+            if meal_type == "breakfast":
+                # 只允许文件日期+1天等于今天（即本周一）
+                if file_date + timedelta(days=1) != today:
+                    logger.warning(f"餐饮早餐任务校验失败，文件日期{file_date}+1天不等于今天{today}，跳过任务")
+                    return schedule.CancelJob
+            elif meal_type == "dinner":
+                # 只允许文件日期-1天等于今天（即本周日）
+                if file_date - timedelta(days=1) != today:
+                    logger.warning(f"餐饮晚餐任务校验失败，文件日期{file_date}-1天不等于今天{today}，跳过任务")
+                    return schedule.CancelJob
+        else:
+            logger.info(f"测试模式启用，跳过{meal_type}餐饮任务的日期校验")
         logger.info(f"触发{meal_type}餐饮更新任务，文件日期校验通过")
         self.executor.submit(self.run_async_unique_update, meal_type)
         return schedule.CancelJob
+        
+    def manual_trigger_unique_update(self, meal_type):
+        """手动触发餐饮更新任务（用于测试）"""
+        if not self.latest_unique_excel:
+            logger.warning("无可用餐饮Excel文件，无法手动触发任务")
+            return False
+        
+        logger.info(f"手动触发{meal_type}餐饮更新任务")
+        self.executor.submit(self.run_async_unique_update, meal_type)
+        return True
         
     def run_async_unique_update(self, meal_type):
         """在线程池中运行餐饮异步更新任务"""
@@ -759,35 +758,58 @@ class DutyUpdateService:
             self.health_status["status"] = "error"
 
     async def process_meal_department(self, file_path, dept, meal_type):
-        """处理单个部门的餐饮数据更新"""
+        """处理单个部门的餐饮数据更新，支持新的多列结构"""
         try:
             # 读取并缓存部门的餐饮数据
             df = self.get_sheet_data(file_path, dept)
             
-            # 确保需要的列存在
-            if meal_type not in df.columns:
-                logger.warning(f"部门 {dept} 的表格中没有 {meal_type} 列")
+            # 检查新的列结构是否存在
+            required_columns = ['breakfast', 'breakfast_department', 'breakfast_card', 
+                              'dinner', 'dinner_department', 'dinner_card']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                logger.warning(f"部门 {dept} 的表格中缺少列: {missing_columns}")
                 return 0
                 
             # 筛选需要更新的用户
             users_to_update = []
             
-            # 遍历员工餐饮信息，找出有值的用户
+            # 遍历每一行数据
             for _, row in df.iterrows():
-                if pd.notna(row[meal_type]) and row[meal_type]:
-                    user = str(row[meal_type]).strip()  # 确保用户名是字符串并去除空格
-                    if user:  # 确保用户名不为空
+                # 处理breakfast相关数据
+                if meal_type == "breakfast":
+                    breakfast_user = row['breakfast']
+                    breakfast_dept = row['breakfast_department'] 
+                    breakfast_card = row['breakfast_card']
+                    
+                    if pd.notna(breakfast_user) and str(breakfast_user).strip():
                         users_to_update.append({
-                            "user": user,
-                            "department": dept,
-                            "status": 1  # 设置状态为1
+                            "user": str(breakfast_user).strip(),
+                            "department": str(breakfast_dept).strip() if pd.notna(breakfast_dept) else None,
+                            "card": str(breakfast_card).strip() if pd.notna(breakfast_card) else None,
+                            "status": 1
+                        })
+                
+                # 处理dinner相关数据
+                elif meal_type == "dinner":
+                    dinner_user = row['dinner']
+                    dinner_dept = row['dinner_department']
+                    dinner_card = row['dinner_card']
+                    
+                    if pd.notna(dinner_user) and str(dinner_user).strip():
+                        users_to_update.append({
+                            "user": str(dinner_user).strip(),
+                            "department": str(dinner_dept).strip() if pd.notna(dinner_dept) else None,
+                            "card": str(dinner_card).strip() if pd.notna(dinner_card) else None,
+                            "status": 1
                         })
             
             # 如果没有需要更新的用户，直接返回
             if not users_to_update:
                 return 0
                 
-            # 批量更新数据库
+            # 批量更新数据库（支持插入和更新）
             update_count = await self.batch_meal_update_users(users_to_update)
             
             logger.info(f"部门 {dept} 的 {meal_type} 更新了 {update_count} 条记录")
@@ -798,7 +820,7 @@ class DutyUpdateService:
             raise
             
     async def batch_meal_update_users(self, users):
-        """批量更新餐饮用户状态，只更新status为1，不执行插入操作"""
+        """批量更新餐饮用户状态，支持插入和更新操作"""
         db_type = self.db_config.get("type", "sqlite").lower()
         total_updated = 0
         # 获取本地当前时间字符串
@@ -811,14 +833,56 @@ class DutyUpdateService:
                 # SQLite批量更新
                 async with self.db_pool.cursor() as cursor:
                     for batch in batches:
-                        # 只更新status字段为1，不执行插入操作
+                        user_names = [u["user"] for u in batch]
+                        # 首先尝试更新已存在的用户
+                        updated_count = 0
                         for u in batch:
                             await cursor.execute(
-                                "UPDATE kbk_ic_manager SET status = ?, last_updated = ? WHERE user = ?",
-                                (u["status"], local_now, u["user"])
+                                "UPDATE kbk_ic_manager SET card = ?, department = ?, status = ?, last_updated = ? WHERE user = ?",
+                                (u["card"], u["department"], u["status"], local_now, u["user"])
                             )
-                            if cursor.rowcount > 0:
-                                total_updated += cursor.rowcount
+                            updated_count += cursor.rowcount
+                        total_updated += updated_count
+                        
+                        # 查找未被更新的用户（即数据库不存在的用户）
+                        if updated_count < len(user_names):
+                            placeholders = ','.join(['?'] * len(user_names))
+                            await cursor.execute(f"SELECT user, card FROM kbk_ic_manager WHERE user IN ({placeholders})", user_names)
+                            exist_users = set([row[0] for row in await cursor.fetchall()])
+                            
+                            # 新增：查找已存在的card，避免唯一性冲突
+                            card_values = [u["card"] for u in batch if u["card"] is not None]
+                            if card_values:
+                                card_placeholders = ','.join(['?'] * len(card_values))
+                                await cursor.execute(f"SELECT card FROM kbk_ic_manager WHERE card IN ({card_placeholders})", card_values)
+                                exist_cards = set([row[0] for row in await cursor.fetchall()])
+                            else:
+                                exist_cards = set()
+                            
+                            # 对不存在的用户执行插入操作，同时避免card冲突
+                            to_insert_candidates = [u for u in batch if u["user"] not in exist_users and (u["card"] is None or u["card"] not in exist_cards)]
+                            
+                            actually_inserted_cards_in_batch = set()  # 跟踪当前批次中已插入的卡号
+                            
+                            for u_candidate in to_insert_candidates:
+                                if u_candidate["card"] is not None and u_candidate["card"] in actually_inserted_cards_in_batch:
+                                    logger.warning(f"跳过插入用户 {u_candidate['user']}，卡号 {u_candidate['card']} 在当前批次中已被使用")
+                                    continue
+
+                                try:
+                                    await cursor.execute(
+                                        "INSERT INTO kbk_ic_manager (user, card, department, status, last_updated) VALUES (?, ?, ?, ?, ?)",
+                                        (u_candidate["user"], u_candidate["card"], u_candidate["department"], u_candidate["status"], local_now)
+                                    )
+                                    if u_candidate["card"] is not None:
+                                        actually_inserted_cards_in_batch.add(u_candidate["card"])
+                                    total_updated += 1 
+                                except sqlite3.IntegrityError as integrity_error:
+                                    logger.error(f"餐饮数据插入完整性错误，用户 {u_candidate['user']} 卡号 {u_candidate['card']}: {integrity_error}")
+                                    ERROR_COUNT.labels(type='meal_insert_integrity_error').inc()
+                                except Exception as general_insert_error:
+                                    logger.error(f"餐饮数据插入意外错误，用户 {u_candidate['user']} 卡号 {u_candidate['card']}: {general_insert_error}")
+                                    ERROR_COUNT.labels(type='meal_insert_unexpected_error').inc()
                 
                 # 提交事务
                 await self.db_pool.commit()
@@ -866,11 +930,12 @@ if __name__ == "__main__":
         await site.start()
         logger.info("HTTP服务器已启动在端口 5552")
     
-    # 创建服务实例
+    # 创建服务实例（启用测试模式）
     service = DutyUpdateService(
         excel_folder, db_config, time_points, 
         unique_excel_folder=unique_excel_folder,  # 添加餐饮Excel文件夹
-        cache_size=20, batch_size=100, max_workers=4
+        cache_size=20, batch_size=100, max_workers=4,
+        test_mode=True  # 启用测试模式，跳过餐饮任务的日期校验
     )
     
     try:
